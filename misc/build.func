@@ -4707,8 +4707,6 @@ EOF
           done
           echo "$result" | xargs
         }
-        run_app_installer_in_ct
-        local lxc_exit=$? 
 
         # Phase 1: Scan global mirrors first (independent of local CDN issues)
         echo "  Phase 1/3: Scanning global mirrors for reachability..."
