@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: vhsdream
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://fluidcalendar.com
+# Source: https://github.com/dotnetfactory/fluid-calendar
 
 APP="fluid-calendar"
 var_tags="${var_tags:-calendar;tasks}"
@@ -12,6 +12,7 @@ var_ram="${var_ram:-4096}"
 var_disk="${var_disk:-7}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -28,6 +29,10 @@ function update_script() {
     msg_error "No ${APP} Installation Found!"
     exit
   fi
+
+  ensure_dependencies build-essential
+  NODE_VERSION="24" setup_nodejs
+
   if check_for_gh_release "fluid-calendar" "dotnetfactory/fluid-calendar"; then
     msg_info "Stopping Service"
     systemctl stop fluid-calendar
@@ -45,7 +50,7 @@ function update_script() {
     $STD npx prisma migrate deploy
     $STD npm run build:os
     msg_ok "Updated Fluid Calendar"
-    
+
     msg_info "Starting Service"
     systemctl start fluid-calendar
     msg_ok "Started Service"
@@ -60,5 +65,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:3000${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:3000${CL}"

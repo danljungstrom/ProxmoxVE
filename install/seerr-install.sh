@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: CrazyWolf13
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://docs.seerr.dev/
+# Source: https://docs.seerr.dev/ | Github: https://github.com/seerr-team/seerr
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -14,7 +14,9 @@ network_check
 update_os
 
 msg_info "Installing Dependencies"
-$STD apt-get install -y build-essential
+$STD apt install -y \
+  build-essential \
+  python3-setuptools
 msg_ok "Installed Dependencies"
 
 fetch_and_deploy_gh_release "seerr" "seerr-team/seerr" "tarball"

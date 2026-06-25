@@ -14,6 +14,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/tools.func)
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/error_handler.func)
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "immich-public-proxy" "addon"
 
 # Enable error handling
 set -Eeuo pipefail
@@ -28,9 +29,8 @@ INSTALL_PATH="/opt/immich-proxy"
 CONFIG_PATH="/opt/immich-proxy/app"
 DEFAULT_PORT=3000
 
-# Initialize all core functions (colors, formatting, icons, STD mode)
+# Initialize all core functions (colors, formatting, icons, $STD mode)
 load_functions
-init_tool_telemetry "" "addon"
 
 # ==============================================================================
 # HEADER
@@ -52,13 +52,13 @@ EOF
 # ==============================================================================
 if [[ -f "/etc/alpine-release" ]]; then
   msg_error "Alpine is not supported for ${APP}. Use Debian."
-  exit 1
+  exit 238
 elif [[ -f "/etc/debian_version" ]]; then
   OS="Debian"
   SERVICE_PATH="/etc/systemd/system/immich-proxy.service"
 else
   echo -e "${CROSS} Unsupported OS detected. Exiting."
-  exit 1
+  exit 238
 fi
 
 # ==============================================================================
@@ -99,7 +99,7 @@ function update() {
 
     msg_info "Installing dependencies"
     cd "$CONFIG_PATH"
-    $STD npm install
+    $STD npm ci
     msg_ok "Installed dependencies"
 
     msg_info "Building ${APP}"
@@ -151,7 +151,7 @@ function install() {
 
   msg_info "Installing dependencies"
   cd "$CONFIG_PATH"
-  $STD npm install
+  $STD npm ci
   msg_ok "Installed dependencies"
 
   msg_info "Building ${APP}"
@@ -231,7 +231,7 @@ if [[ "${type:-}" == "update" ]]; then
     update
   else
     msg_error "${APP} is not installed. Nothing to update."
-    exit 1
+    exit 233
   fi
   exit 0
 fi

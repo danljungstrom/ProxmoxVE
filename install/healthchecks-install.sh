@@ -2,7 +2,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (Canbiz)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://healthchecks.io/
+# Source: https://healthchecks.io/ | Github: https://github.com/healthchecks/healthchecks
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -24,7 +24,7 @@ $STD apt install -y \
   caddy
 
 mkdir -p ~/.config/pip
-cat > ~/.config/pip/pip.conf << EOF
+cat >~/.config/pip/pip.conf <<EOF
 [global]
 break-system-packages = true
 EOF
@@ -35,7 +35,7 @@ PG_DB_NAME="healthchecks_db" PG_DB_USER="hc_user" PG_DB_PASS=$(openssl rand -bas
 
 msg_info "Setup Keys (Admin / Secret)"
 SECRET_KEY="$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | cut -c1-32)"
-ADMIN_EMAIL="admin@helper-scripts.local"
+ADMIN_EMAIL="admin@community-scripts.org"
 ADMIN_PASSWORD="$PG_DB_PASS"
 {
   echo "healthchecks Admin Email: $ADMIN_EMAIL"

@@ -12,6 +12,7 @@ var_ram="${var_ram:-512}"
 var_disk="${var_disk:-4}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 var_tun="${var_tun:-1}"
 
@@ -37,7 +38,7 @@ function update_script() {
   if [[ -d /etc/wgdashboard ]]; then
     sleep 2
     cd /etc/wgdashboard/src
-    $STD ./wgd.sh update
+    $STD ./wgd.sh update -y
     $STD ./wgd.sh start
   fi
   msg_ok "Updated LXC"
@@ -52,4 +53,4 @@ description
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
 echo -e "${INFO}${YW}Access WGDashboard (if installed) using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:10086${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:10086${CL}"

@@ -23,7 +23,7 @@ msg_ok "Installed Dependencies"
 
 NODE_VERSION=$(curl -s https://raw.githubusercontent.com/homarr-labs/homarr/dev/package.json | jq -r '.engines.node | split(">=")[1] | split(".")[0]')
 setup_nodejs
-fetch_and_deploy_gh_release "homarr" "homarr-labs/homarr" "prebuild" "latest" "/opt/homarr" "build-debian-amd64.tar.gz"
+fetch_and_deploy_gh_release "homarr" "homarr-labs/homarr" "prebuild" "latest" "/opt/homarr" "build-debian-$(arch_resolve).tar.gz"
 
 msg_info "Installing Homarr"
 mkdir -p /opt/homarr_db
@@ -47,6 +47,8 @@ mkdir -p /appdata/redis
 chown -R redis:redis /appdata/redis
 chmod 744 /appdata/redis
 cp /opt/homarr/redis.conf /etc/redis/redis.conf
+sed -i -e '$a\' /etc/redis/redis.conf
+grep -q '^bind 127.0.0.1 -::1$' /etc/redis/redis.conf || echo "bind 127.0.0.1 -::1" >>/etc/redis/redis.conf
 rm /etc/nginx/nginx.conf
 mkdir -p /etc/nginx/templates
 cp /opt/homarr/nginx.conf /etc/nginx/templates/nginx.conf
@@ -80,7 +82,7 @@ chmod +x /opt/homarr/run.sh
 systemctl daemon-reload
 systemctl enable -q --now redis-server
 systemctl enable -q --now homarr
-systemctl disable -q --now nginx 
+systemctl disable -q --now nginx
 msg_ok "Created Services"
 
 motd_ssh

@@ -3,6 +3,7 @@
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster) | MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Source: https://nicolargo.github.io/glances/ | Github: https://github.com/nicolargo/glances
 
 function header_info {
   clear
@@ -92,7 +93,7 @@ EOF
 update_glances_debian() {
   if [[ ! -d /opt/glances/.venv ]]; then
     msg_error "$APP is not installed"
-    exit 1
+    exit 233
   fi
   msg_info "Updating $APP"
   cd /opt/glances
@@ -159,7 +160,7 @@ EOF
 update_glances_alpine() {
   if [[ ! -d /opt/glances/.venv ]]; then
     msg_error "$APP is not installed"
-    exit 1
+    exit 233
   fi
   msg_info "Updating $APP"
   cd /opt/glances

@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://tautulli.com/
+# Source: https://tautulli.com/ | Github: https://github.com/Tautulli/Tautulli
 
 APP="Tautulli"
 var_tags="${var_tags:-media}"
@@ -12,6 +12,7 @@ var_ram="${var_ram:-1024}"
 var_disk="${var_disk:-4}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -51,6 +52,7 @@ function update_script() {
     $STD source /opt/Tautulli/.venv/bin/activate
     $STD uv pip install -r requirements.txt
     $STD uv pip install pyopenssl
+    $STD uv pip install "setuptools<81"
     msg_ok "Updated Tautulli"
 
     msg_info "Restoring config and database"
@@ -73,5 +75,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:8181${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:8181${CL}"

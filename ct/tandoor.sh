@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (Canbiz)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://tandoor.dev/
+# Source: https://tandoor.dev/ | Github: https://github.com/TandoorRecipes/recipes
 
 APP="Tandoor"
 var_tags="${var_tags:-recipes}"
@@ -12,6 +12,7 @@ var_ram="${var_ram:-4096}"
 var_disk="${var_disk:-10}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -31,6 +32,10 @@ function update_script() {
   if [[ ! -f ~/.tandoor ]]; then
     msg_error "v1 Installation found, please export your data and create an new LXC."
     exit
+  fi
+
+  if ! grep -q "^ALLOWED_HOSTS=" /opt/tandoor/.env; then
+    echo "ALLOWED_HOSTS=${LOCAL_IP}" >>/opt/tandoor/.env
   fi
 
   if check_for_gh_release "tandoor" "TandoorRecipes/recipes"; then
@@ -82,5 +87,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:8002${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:8002${CL}"

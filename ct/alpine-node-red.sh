@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://nodered.org
+# Source: https://nodered.org/
 
 APP="Alpine-Node-RED"
 var_tags="${var_tags:-alpine;automation}"
@@ -12,6 +12,7 @@ var_ram="${var_ram:-256}"
 var_disk="${var_disk:-1}"
 var_os="${var_os:-alpine}"
 var_version="${var_version:-3.23}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -31,6 +32,10 @@ function update_script() {
   msg_info "Updating Node-RED"
   $STD npm install -g --unsafe-perm node-red
   msg_ok "Updated Node-RED"
+
+  msg_info "Restarting Node-RED"
+  $STD rc-service nodered restart
+  msg_ok "Restarted Node-RED"
   msg_ok "Updated successfully!"
   exit 0
 }
@@ -41,5 +46,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:1880${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:1880${CL}"

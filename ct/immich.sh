@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: vhsdream
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://immich.app
+# Source: https://immich.app | Github: https://github.com/immich-app/immich
 
 APP="immich"
 var_tags="${var_tags:-photos}"
@@ -12,6 +12,7 @@ var_cpu="${var_cpu:-4}"
 var_ram="${var_ram:-6144}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 var_gpu="${var_gpu:-yes}"
 
@@ -36,9 +37,13 @@ function update_script() {
     exit
   fi
 
-  if [[ ! -f /etc/apt/preferences.d/preferences ]]; then
+  if ! grep -qE '(^|[[:space:]])testing([[:space:]]|$)' /etc/apt/sources.list.d/debian.sources 2>/dev/null; then
     msg_info "Adding Debian Testing repo"
-    sed -i 's/ trixie-updates/ trixie-updates testing/g' /etc/apt/sources.list.d/debian.sources
+    if grep -q "trixie-updates" /etc/apt/sources.list.d/debian.sources 2>/dev/null; then
+      sed -i 's/ trixie-updates/ trixie-updates testing/g' /etc/apt/sources.list.d/debian.sources
+    else
+      sed -i '/^[[:space:]]*Suites:.*trixie/ s/$/ testing/' /etc/apt/sources.list.d/debian.sources
+    fi
     cat <<EOF >/etc/apt/preferences.d/preferences
 Package: *
 Pin: release a=unstable
@@ -62,7 +67,7 @@ EOF
   if [[ ! -f /etc/apt/sources.list.d/mise.list ]]; then
     msg_info "Installing Mise"
     curl -fSs https://mise.jdx.dev/gpg-key.pub | tee /etc/apt/keyrings/mise-archive-keyring.pub 1>/dev/null
-    echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.pub arch=amd64] https://mise.jdx.dev/deb stable main" >/etc/apt/sources.list.d/mise.list
+    echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.pub arch=$(arch_resolve)] https://mise.jdx.dev/deb stable main" >/etc/apt/sources.list.d/mise.list
     ensure_dependencies mise
     msg_ok "Installed Mise"
   fi
@@ -72,16 +77,16 @@ EOF
   SOURCE_DIR=${STAGING_DIR}/image-source
   cd /tmp
   if [[ -f ~/.intel_version ]]; then
-    curl -fsSLO https://raw.githubusercontent.com/immich-app/base-images/refs/heads/main/server/Dockerfile
+    curl_with_retry "https://raw.githubusercontent.com/immich-app/immich/refs/heads/main/machine-learning/Dockerfile" "Dockerfile"
     readarray -t INTEL_URLS < <(
-      sed -n "/intel-[igc|opencl]/p" ./Dockerfile | awk '{print $2}'
+      sed -n "/intel-[igc|opencl]/p" ./Dockerfile | awk '{print $3}'
       sed -n "/libigdgmm12/p" ./Dockerfile | awk '{print $3}'
     )
     INTEL_RELEASE="$(grep "intel-opencl-icd_" ./Dockerfile | awk -F '_' '{print $2}')"
     if [[ "$INTEL_RELEASE" != "$(cat ~/.intel_version)" ]]; then
-      msg_info "Updating Intel iGPU dependencies"
+      msg_info "Updating Intel OpenVINO dependencies"
       for url in "${INTEL_URLS[@]}"; do
-        curl -fsSLO "$url"
+        curl_with_retry "$url" "$(basename "$url")"
       done
       $STD apt-mark unhold libigdgmm12
       $STD apt install -y --allow-downgrades ./libigdgmm12*.deb
@@ -90,14 +95,14 @@ EOF
       rm ./*.deb
       $STD apt-mark hold libigdgmm12
       dpkg-query -W -f='${Version}\n' intel-opencl-icd >~/.intel_version
-      msg_ok "Intel iGPU dependencies updated"
+      rm -f ./Dockerfile
+      msg_ok "Updated Intel OpenVINO dependencies"
     fi
-    rm ./Dockerfile
   fi
   if [[ -f ~/.immich_library_revisions ]]; then
     libraries=("libjxl" "libheif" "libraw" "imagemagick" "libvips")
     cd "$BASE_DIR"
-    msg_info "Checking for updates to custom image-processing libraries"
+    msg_warn "Checking for updates to custom image-processing libraries (recompile time: 2-15min per library)"
     $STD git pull
     for library in "${libraries[@]}"; do
       compile_"$library"
@@ -105,8 +110,8 @@ EOF
     msg_ok "Image-processing libraries up to date"
   fi
 
-  RELEASE="2.5.6"
-  if check_for_gh_release "Immich" "immich-app/immich" "${RELEASE}"; then
+  RELEASE="v2.7.5"
+  if check_for_gh_release "Immich" "immich-app/immich" "${RELEASE}" "each release is tested individually before the version is updated. Please do not open issues for this"; then
     if [[ $(cat ~/.immich) > "2.5.1" ]]; then
       msg_info "Enabling Maintenance Mode"
       cd /opt/immich/app/bin
@@ -121,15 +126,15 @@ EOF
     msg_ok "Stopped Services"
     VCHORD_RELEASE="0.5.3"
     [[ -f ~/.vchord_version ]] && mv ~/.vchord_version ~/.vectorchord
-    if check_for_gh_release "VectorChord" "tensorchord/VectorChord" "${VCHORD_RELEASE}"; then
-      fetch_and_deploy_gh_release "VectorChord" "tensorchord/VectorChord" "binary" "${VCHORD_RELEASE}" "/tmp" "postgresql-16-vchord_*_amd64.deb"
+    if check_for_gh_release "VectorChord" "tensorchord/VectorChord" "${VCHORD_RELEASE}" "updated together with Immich after testing"; then
+      fetch_and_deploy_gh_release "VectorChord" "tensorchord/VectorChord" "binary" "${VCHORD_RELEASE}" "/tmp" "postgresql-16-vchord_*_$(arch_resolve).deb"
       systemctl restart postgresql
       $STD sudo -u postgres psql -d immich -c "ALTER EXTENSION vector UPDATE;"
       $STD sudo -u postgres psql -d immich -c "ALTER EXTENSION vchord UPDATE;"
       $STD sudo -u postgres psql -d immich -c "REINDEX INDEX face_index;"
       $STD sudo -u postgres psql -d immich -c "REINDEX INDEX clip_index;"
     fi
-    ensure_dependencies ccache
+    ensure_dependencies ccache gcc-13 g++-13
 
     INSTALL_DIR="/opt/${APP}"
     UPLOAD_DIR="$(sed -n '/^IMMICH_MEDIA_LOCATION/s/[^=]*=//p' /opt/immich/.env)"
@@ -161,15 +166,14 @@ EOF
     )
 
     setup_uv
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "Immich" "immich-app/immich" "tarball" "v${RELEASE}" "$SRC_DIR"
-    PNPM_VERSION="$(jq -r '.packageManager | split("@")[1]' ${SRC_DIR}/package.json)"
-    NODE_VERSION="24" NODE_MODULE="pnpm@${PNPM_VERSION}" setup_nodejs
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "Immich" "immich-app/immich" "tarball" "${RELEASE}" "$SRC_DIR"
+    PNPM_VERSION="$(jq -r '.packageManager | split("@")[1] | split("+")[0]' ${SRC_DIR}/package.json)"
+    NODE_VERSION="24" NODE_MODULE="corepack,pnpm@${PNPM_VERSION}" setup_nodejs
 
     msg_info "Updating Immich web and microservices"
     cd "$SRC_DIR"/server
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
     export CI=1
-    corepack enable
 
     # server build
     export SHARP_IGNORE_GLOBAL_LIBVIPS=true
@@ -177,6 +181,12 @@ EOF
     unset SHARP_IGNORE_GLOBAL_LIBVIPS
     export SHARP_FORCE_GLOBAL_LIBVIPS=true
     $STD pnpm --filter immich --frozen-lockfile --prod --no-optional deploy "$APP_DIR"
+
+    # Patch helmet.json: disable upgrade-insecure-requests for HTTP access
+    if [[ -f "$APP_DIR/helmet.json" ]]; then
+      jq '.contentSecurityPolicy.directives["upgrade-insecure-requests"] = null' "$APP_DIR/helmet.json" >"$APP_DIR/helmet.json.tmp" && mv "$APP_DIR/helmet.json.tmp" "$APP_DIR/helmet.json"
+    fi
+
     cp "$APP_DIR"/package.json "$APP_DIR"/bin
     sed -i "s|^start|${APP_DIR}/bin/start|" "$APP_DIR"/bin/immich-admin
 
@@ -209,18 +219,42 @@ EOF
     msg_ok "Updated Immich server, web, cli and plugins"
 
     cd "$SRC_DIR"/machine-learning
-    mkdir -p "$ML_DIR" && chown -R immich:immich "$ML_DIR"
+    mkdir -p "$ML_DIR"
+    # chown excluding upload dir contents (may be a mount with restricted permissions)
+    chown immich:immich "$INSTALL_DIR"
+    find "$INSTALL_DIR" -maxdepth 1 -mindepth 1 ! -name upload -exec chown -R immich:immich {} +
+    chown immich:immich "${UPLOAD_DIR:-$INSTALL_DIR/upload}" 2>/dev/null || true
     chown immich:immich ./uv.lock
     export VIRTUAL_ENV="${ML_DIR}"/ml-venv
+    export UV_HTTP_TIMEOUT=300
     if [[ -f ~/.openvino ]]; then
-      msg_info "Updating HW-accelerated machine-learning"
-      $STD uv add --no-sync --optional openvino onnxruntime-openvino==1.20.0 --active -n -p python3.12 --managed-python
-      $STD sudo --preserve-env=VIRTUAL_ENV -nu immich uv sync --extra openvino --no-dev --active --link-mode copy -n -p python3.12 --managed-python
-      patchelf --clear-execstack "${VIRTUAL_ENV}/lib/python3.12/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.cpython-312-x86_64-linux-gnu.so"
-      msg_ok "Updated HW-accelerated machine-learning"
+      ML_PYTHON="python3.13"
+      msg_info "Pre-installing Python ${ML_PYTHON} for machine-learning"
+      for attempt in $(seq 1 3); do
+        $STD sudo --preserve-env=VIRTUAL_ENV -nu immich uv python install "${ML_PYTHON}" && break
+        [[ $attempt -lt 3 ]] && msg_warn "Python download attempt $attempt failed, retrying..." && sleep 5
+      done
+      msg_ok "Pre-installed Python ${ML_PYTHON}"
+      msg_info "Updating Intel OpenVINO machine-learning"
+      for attempt in $(seq 1 3); do
+        $STD sudo --preserve-env=VIRTUAL_ENV,UV_HTTP_TIMEOUT -nu immich uv sync --extra openvino --no-dev --active --link-mode copy -n -p "${ML_PYTHON}" --managed-python && break
+        [[ $attempt -lt 3 ]] && msg_warn "uv sync attempt $attempt failed, retrying..." && sleep 10
+      done
+      patchelf --clear-execstack "${VIRTUAL_ENV}/lib/python3.13/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.cpython-313-$(arch_resolve "x86_64" "aarch64")-linux-gnu.so"
+      msg_ok "Updated Intel OpenVINO machine-learning"
     else
+      ML_PYTHON="python3.11"
+      msg_info "Pre-installing Python ${ML_PYTHON} for machine-learning"
+      for attempt in $(seq 1 3); do
+        $STD sudo --preserve-env=VIRTUAL_ENV -nu immich uv python install "${ML_PYTHON}" && break
+        [[ $attempt -lt 3 ]] && msg_warn "Python download attempt $attempt failed, retrying..." && sleep 5
+      done
+      msg_ok "Pre-installed Python ${ML_PYTHON}"
       msg_info "Updating machine-learning"
-      $STD sudo --preserve-env=VIRTUAL_ENV -nu immich uv sync --extra cpu --no-dev --active --link-mode copy -n -p python3.11 --managed-python
+      for attempt in $(seq 1 3); do
+        $STD sudo --preserve-env=VIRTUAL_ENV,UV_HTTP_TIMEOUT -nu immich uv sync --extra cpu --no-dev --active --link-mode copy -n -p "${ML_PYTHON}" --managed-python && break
+        [[ $attempt -lt 3 ]] && msg_warn "uv sync attempt $attempt failed, retrying..." && sleep 10
+      done
       msg_ok "Updated machine-learning"
     fi
     cd "$SRC_DIR"
@@ -238,11 +272,28 @@ EOF
     [[ ! -f /usr/bin/immich ]] && ln -sf "$APP_DIR"/cli/bin/immich /usr/bin/immich
     [[ ! -f /usr/bin/immich-admin ]] && ln -sf "$APP_DIR"/bin/immich-admin /usr/bin/immich-admin
 
-    chown -R immich:immich "$INSTALL_DIR"
+    if ! grep -q '^DB_HOSTNAME=' "$INSTALL_DIR"/.env; then
+      sed -i '/^DB_DATABASE_NAME/a DB_HOSTNAME=127.0.0.1' "$INSTALL_DIR"/.env
+    fi
+    if ! grep -q 'HELMET_FILE' "$INSTALL_DIR"/.env; then
+      sed -i -e '$a\' "$INSTALL_DIR"/.env
+      echo "IMMICH_HELMET_FILE=true" >>"$INSTALL_DIR"/.env
+    fi
+
+    if grep -q 'ExecStart=/usr/bin/node' /etc/systemd/system/immich-web.service; then
+      sed -i '/^EnvironmentFile=/d' /etc/systemd/system/immich-web.service
+      sed -i "s|^ExecStart=.*|ExecStart=${APP_DIR}/bin/start.sh|" /etc/systemd/system/immich-web.service
+      systemctl daemon-reload
+    fi
+
+    # chown excluding upload dir contents (may be a mount with restricted permissions)
+    chown immich:immich "$INSTALL_DIR"
+    find "$INSTALL_DIR" -maxdepth 1 -mindepth 1 ! -name upload -exec chown -R immich:immich {} +
+    chown immich:immich "${UPLOAD_DIR:-$INSTALL_DIR/upload}" 2>/dev/null || true
     if [[ "${MAINT_MODE:-0}" == 1 ]]; then
       msg_info "Disabling Maintenance Mode"
       cd /opt/immich/app/bin
-      $STD ./immich-admin disable-maintenance-mode
+      $STD ./immich-admin disable-maintenance-mode || true
       unset MAINT_MODE
       $STD cd -
       msg_ok "Disabled Maintenance Mode"
@@ -258,7 +309,8 @@ function compile_libjxl() {
   SOURCE=${SOURCE_DIR}/libjxl
   JPEGLI_LIBJPEG_LIBRARY_SOVERSION="62"
   JPEGLI_LIBJPEG_LIBRARY_VERSION="62.3.0"
-  : "${LIBJXL_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libjxl.json)}"
+  LIBJXL_REVISION="332feb17d17311c748445f7ee75c4fb55cc38530"
+  # : "${LIBJXL_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libjxl.json)}"
   if [[ "$LIBJXL_REVISION" != "$(grep 'libjxl' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
     msg_info "Recompiling libjxl"
     [[ -d "$SOURCE" ]] && rm -rf "$SOURCE"
@@ -302,7 +354,8 @@ function compile_libjxl() {
 function compile_libheif() {
   SOURCE=${SOURCE_DIR}/libheif
   ensure_dependencies libaom-dev
-  : "${LIBHEIF_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libheif.json)}"
+  LIBHEIF_REVISION="62f1b8c76ed4d8305071fdacbe74ef9717bacac5"
+  # : "${LIBHEIF_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libheif.json)}"
   if [[ "${update:-}" ]] || [[ "$LIBHEIF_REVISION" != "$(grep 'libheif' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
     msg_info "Recompiling libheif"
     [[ -d "$SOURCE" ]] && rm -rf "$SOURCE"
@@ -333,11 +386,12 @@ function compile_libheif() {
 
 function compile_libraw() {
   SOURCE=${SOURCE_DIR}/libraw
-  : "${LIBRAW_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libraw.json)}"
+  LIBRAW_REVISION="b860248a89d9082b8e0a1e202e516f46af9adb29"
+  # : "${LIBRAW_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libraw.json)}"
   if [[ "$LIBRAW_REVISION" != "$(grep 'libraw' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
     msg_info "Recompiling libraw"
     [[ -d "$SOURCE" ]] && rm -rf "$SOURCE"
-    $STD git clone https://github.com/libraw/libraw.git "$SOURCE"
+    $STD git clone https://github.com/LibRaw/LibRaw.git "$SOURCE"
     cd "$SOURCE"
     $STD git reset --hard "$LIBRAW_REVISION"
     $STD autoreconf --install
@@ -375,7 +429,7 @@ function compile_imagemagick() {
 
 function compile_libvips() {
   SOURCE=$SOURCE_DIR/libvips
-  : "${LIBVIPS_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libvips.json)}"
+  LIBVIPS_REVISION="17ad2f62dda7e39985955da189183e594683d45e"
   if [[ "$LIBVIPS_REVISION" != "$(grep 'libvips' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
     msg_info "Recompiling libvips"
     [[ -d "$SOURCE" ]] && rm -rf "$SOURCE"
@@ -399,5 +453,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:2283${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:2283${CL}"

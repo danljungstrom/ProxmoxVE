@@ -12,6 +12,7 @@ var_ram="${var_ram:-2048}"
 var_disk="${var_disk:-8}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 var_gpu="${var_gpu:-yes}"
 
@@ -31,11 +32,76 @@ function update_script() {
 
   setup_uv
   NODE_VERSION="24" setup_nodejs
+  if [[ -f "/etc/nginx/sites-available/dispatcharr.conf" ]] && ! grep -q "real_forwarded_proto" "/etc/nginx/sites-available/dispatcharr.conf"; then
+    msg_info "Migrating Nginx Configuration"
+    cat <<EOF >"/etc/nginx/sites-available/dispatcharr.conf"
+map \$http_x_forwarded_proto \$real_forwarded_proto {
+    ""      \$scheme;
+    default \$http_x_forwarded_proto;
+}
 
-  # Fix for nginx not allowing large files
-  if ! grep -q "client_max_body_size 100M;" /etc/nginx/sites-available/dispatcharr.conf; then
-    sed -i '/server_name _;/a \    client_max_body_size 100M;' /etc/nginx/sites-available/dispatcharr.conf
+map \$http_x_forwarded_port \$real_forwarded_port {
+    ""      \$server_port;
+    default \$http_x_forwarded_port;
+}
+
+server {
+    listen 9191;
+    server_name _;
+    client_max_body_size 100M;
+
+    # Serve static assets with correct MIME types
+    location /assets/ {
+        alias /opt/dispatcharr/frontend/dist/assets/;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+
+        # Explicitly set MIME types for webpack-built assets
+        types {
+            text/javascript js;
+            text/css css;
+            image/png png;
+            image/svg+xml svg svgz;
+            font/woff2 woff2;
+            font/woff woff;
+            font/ttf ttf;
+        }
+    }
+
+    location /static/ {
+        alias /opt/dispatcharr/static/;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location /media/ {
+        alias /opt/dispatcharr/media/;
+    }
+
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$real_forwarded_proto;
+    }
+
+    # All other requests proxy to uWSGI
+    location / {
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$real_forwarded_proto;
+        proxy_set_header X-Forwarded-Port \$real_forwarded_port;
+        proxy_pass http://127.0.0.1:5656;
+    }
+}
+EOF
     systemctl reload nginx
+    msg_ok "Migrated Nginx Configuration"
   fi
 
   ensure_dependencies vlc-bin vlc-plugin-base
@@ -54,7 +120,7 @@ function update_script() {
       cp /opt/dispatcharr/.env /tmp/dispatcharr.env.backup
     fi
     if [[ -f /opt/dispatcharr/start-gunicorn.sh ]]; then
-      cp /opt/dispatcharr/start-gunicorn.sh /tmp/start-gunicorn.sh.backup
+      rm -f /opt/dispatcharr/start-gunicorn.sh
     fi
     if [[ -f /opt/dispatcharr/start-celery.sh ]]; then
       cp /opt/dispatcharr/start-celery.sh /tmp/start-celery.sh.backup
@@ -70,7 +136,7 @@ function update_script() {
       source /opt/dispatcharr/.env
       set +o allexport
       if [[ -n "$POSTGRES_DB" ]] && [[ -n "$POSTGRES_USER" ]] && [[ -n "$POSTGRES_PASSWORD" ]]; then
-        PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER -h ${POSTGRES_HOST:-localhost} $POSTGRES_DB >/tmp/dispatcharr_db_$(date +%F).sql
+        PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U "$POSTGRES_USER" -h "${POSTGRES_HOST:-localhost}" -p "${POSTGRES_PORT:-5432}" "$POSTGRES_DB" >/tmp/dispatcharr_db_$(date +%F).sql
         msg_info "Database backup created"
       fi
     fi
@@ -82,9 +148,6 @@ function update_script() {
     msg_info "Updating Dispatcharr Backend"
     if [[ -f /tmp/dispatcharr.env.backup ]]; then
       mv /tmp/dispatcharr.env.backup /opt/dispatcharr/.env
-    fi
-    if [[ -f /tmp/start-gunicorn.sh.backup ]]; then
-      mv /tmp/start-gunicorn.sh.backup /opt/dispatcharr/start-gunicorn.sh
     fi
     if [[ -f /tmp/start-celery.sh.backup ]]; then
       mv /tmp/start-celery.sh.backup /opt/dispatcharr/start-celery.sh
@@ -105,12 +168,42 @@ function update_script() {
     rm -rf .venv
     $STD uv venv --clear
     $STD uv sync
-    $STD uv pip install gunicorn gevent celery redis daphne
+    $STD uv pip install uwsgi gevent celery redis daphne
+    cat <<'EOF' >/opt/dispatcharr/start-uwsgi.sh
+#!/usr/bin/env bash
+cd /opt/dispatcharr
+set -a
+source .env
+set +a
+exec .venv/bin/uwsgi \
+    --chdir=/opt/dispatcharr \
+    --module=dispatcharr.wsgi:application \
+    --master \
+    --workers=4 \
+    --gevent=400 \
+    --http=0.0.0.0:5656 \
+    --http-keepalive=1 \
+    --http-timeout=600 \
+    --socket-timeout=600 \
+    --buffer-size=65536 \
+    --post-buffering=4096 \
+    --lazy-apps \
+    --thunder-lock \
+    --die-on-term \
+    --vacuum
+EOF
+    chmod +x /opt/dispatcharr/start-uwsgi.sh
+    if grep -q 'start-gunicorn.sh' /etc/systemd/system/dispatcharr.service; then
+      sed -i 's|start-gunicorn.sh|start-uwsgi.sh|g' /etc/systemd/system/dispatcharr.service
+      systemctl daemon-reload
+    fi
     msg_ok "Updated Dispatcharr Backend"
 
     msg_info "Building Frontend"
     cd /opt/dispatcharr/frontend
-    $STD npm install --legacy-peer-deps
+    node -e "const p=require('./package.json');p.overrides=p.overrides||{};p.overrides['webworkify-webpack']='2.1.3';require('fs').writeFileSync('package.json',JSON.stringify(p,null,2));"
+    rm -f package-lock.json
+    $STD npm install --no-audit --progress=false
     $STD npm run build
     msg_ok "Built Frontend"
 
@@ -143,5 +236,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:9191${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:9191${CL}"

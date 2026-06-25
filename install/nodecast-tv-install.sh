@@ -13,8 +13,8 @@ setting_up_container
 network_check
 update_os
 
-fetch_and_deploy_gh_release "nodecast-tv" "technomancer702/nodecast-tv"
-setup_nodejs
+fetch_and_deploy_gh_release "nodecast-tv" "technomancer702/nodecast-tv" "tarball"
+NODE_VERSION="20" setup_nodejs
 
 msg_info "Installing Dependencies"
 $STD apt install -y ffmpeg

@@ -3,6 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Source: https://github.com/filebrowserspace/quantum
 
 function header_info() {
   clear
@@ -42,6 +43,21 @@ IP=$(ip -4 addr show "$IFACE" | awk '/inet / {print $2}' | cut -d/ -f1 | head -n
 [[ -z "$IP" ]] && IP=$(hostname -I | awk '{print $1}')
 [[ -z "$IP" ]] && IP="127.0.0.1"
 
+# Proxmox Host Warning
+if [[ -d "/etc/pve" ]]; then
+  echo -e "${RD}⚠️  Warning: Running this addon directly on the Proxmox host is not recommended!${CL}"
+  echo -e "${YW}   Only the boot disk will be visible — passthrough drives will not be indexed.${CL}"
+  echo -e "${YW}   This causes incorrect disk usage stats and incomplete file browsing.${CL}"
+  echo -e "${YW}   Run this addon inside an LXC or VM instead and mount your drives there.${CL}"
+  echo ""
+  echo -n "Continue anyway on the Proxmox host? (y/N): "
+  read -r host_confirm
+  if [[ ! "${host_confirm,,}" =~ ^(y|yes)$ ]]; then
+    echo -e "${YW}Aborted.${CL}"
+    exit 0
+  fi
+fi
+
 # OS Detection
 if [[ -f "/etc/alpine-release" ]]; then
   OS="Alpine"
@@ -53,7 +69,7 @@ elif [[ -f "/etc/debian_version" ]]; then
   PKG_MANAGER="apt-get install -y"
 else
   echo -e "${CROSS} Unsupported OS detected. Exiting."
-  exit 1
+  exit 238
 fi
 
 header_info
@@ -200,9 +216,9 @@ server:
             - neverWatchPath: "/lost+found"
 auth:
   adminUsername: admin
-  adminPassword: helper-scripts.com
+  adminPassword: community-scripts.org
 EOF
-  msg_ok "Configured with default admin (admin / helper-scripts.com)"
+  msg_ok "Configured with default admin (admin / community-scripts.org)"
 fi
 
 msg_info "Creating service"

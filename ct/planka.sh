@@ -12,6 +12,7 @@ var_ram="${var_ram:-1024}"
 var_disk="${var_disk:-4}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -31,7 +32,7 @@ function update_script() {
   if check_for_gh_release "planka" "plankanban/planka"; then
     msg_info "Stopping Service"
     systemctl stop planka
-    msg_info "Stopped Service"
+    msg_ok "Stopped Service"
 
     msg_info "Backing up data"
     BK="/opt/planka-backup"
@@ -70,7 +71,7 @@ function update_script() {
     rm -rf "$BK"
     msg_ok "Restored data"
 
-    msg_ok "Migrate Database"
+    msg_info "Migrate Database"
     cd /opt/planka
     $STD npm run db:upgrade
     $STD npm run db:migrate
@@ -90,5 +91,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:1337${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:1337${CL}"

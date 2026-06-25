@@ -7,11 +7,12 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 
 APP="Scanopy"
 var_tags="${var_tags:-analytics}"
-var_cpu="${var_cpu:-2}"
-var_ram="${var_ram:-3072}"
-var_disk="${var_disk:-6}"
+var_cpu="${var_cpu:-4}"
+var_ram="${var_ram:-4096}"
+var_disk="${var_disk:-8}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -53,6 +54,13 @@ function update_script() {
     fi
     sed -i 's|_TARGET=.*$|_URL=http://127.0.0.1:60072|' /opt/scanopy/.env
 
+    msg_info "Building Scanopy Server (patience)"
+    cd /opt/scanopy/backend
+    $STD cargo build --release --bin server --bin generate-fixtures
+    $STD ./target/release/generate-fixtures --output-dir /opt/scanopy/ui/src/lib/data
+    mv ./target/release/server /usr/bin/scanopy-server
+    msg_ok "Built Scanopy Server"
+
     msg_info "Creating frontend UI"
     export PUBLIC_SERVER_HOSTNAME=default
     export PUBLIC_SERVER_PORT=""
@@ -61,14 +69,8 @@ function update_script() {
     $STD npm run build
     msg_ok "Created frontend UI"
 
-    msg_info "Building Scanopy Server (patience)"
-    cd /opt/scanopy/backend
-    $STD cargo build --release --bin server
-    mv ./target/release/server /usr/bin/scanopy-server
-    msg_ok "Built Scanopy Server"
-
     if [[ -f /etc/systemd/system/scanopy-daemon.service ]]; then
-      fetch_and_deploy_gh_release "Scanopy Daemon" "scanopy/scanopy" "singlefile" "latest" "/usr/local/bin" "scanopy-daemon-linux-amd64"
+      fetch_and_deploy_gh_release "Scanopy Daemon" "scanopy/scanopy" "singlefile" "latest" "/usr/local/bin" "scanopy-daemon-linux-$(arch_resolve)"
       mv "/usr/local/bin/Scanopy Daemon" /usr/local/bin/scanopy-daemon
       rm -f /usr/bin/scanopy-daemon ~/configure_daemon.sh
       sed -i -e 's|usr/bin|usr/local/bin|' \
@@ -92,6 +94,6 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:60072${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:60072${CL}"
 echo -e "${INFO}${YW} Then create your account, and create a daemon in the UI.${CL}"

@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ) | DevelopmentCats | AlphaLawless
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://romm.app
+# Source: https://romm.app | Github: https://github.com/rommapp/romm
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -37,12 +37,21 @@ $STD apt install -y \
   redis-server \
   redis-tools \
   p7zip-full \
-  tzdata \
-  nginx
+  tzdata
 msg_ok "Installed Dependencies"
 
+msg_info "Installing Angie with mod_zip module"
+setup_deb822_repo \
+  "angie" \
+  "https://angie.software/keys/angie-signing.gpg" \
+  "https://download.angie.software/angie/debian/$(get_os_info version_id)" \
+  "$(get_os_info codename)" \
+  "main"
+$STD apt-get install -y angie angie-module-zip
+sed -i '1i load_module modules/ngx_http_zip_module.so;' /etc/angie/angie.conf
+msg_ok "Installed Angie with mod_zip module"
 PYTHON_VERSION="3.13" setup_uv
-NODE_VERSION="22" setup_nodejs
+NODE_VERSION="24" setup_nodejs
 setup_mariadb
 MARIADB_DB_NAME="romm" MARIADB_DB_USER="romm" setup_mariadb_db
 
@@ -116,11 +125,15 @@ EOF
 chmod 644 /var/lib/romm/config/config.yml
 msg_ok "Created configuration file"
 
-fetch_and_deploy_gh_release "RAHasher" "RetroAchievements/RALibretro" "prebuild" "latest" "/opt/RALibretro" "RAHasher-x64-Linux-*.zip"
-cp /opt/RALibretro/RAHasher /usr/bin/RAHasher
-chmod +x /usr/bin/RAHasher
+if [[ "$(arch_resolve)" != "arm64" ]]; then
+  fetch_and_deploy_gh_release "RAHasher" "RetroAchievements/RALibretro" "prebuild" "latest" "/opt/RALibretro" "RAHasher-x64-Linux-*.zip"
+  cp /opt/RALibretro/RAHasher /usr/bin/RAHasher
+  chmod +x /usr/bin/RAHasher
+else
+  msg_warn "RAHasher (RetroAchievements hashing) has no arm64 build; skipping. RA hash features will be unavailable."
+fi
 
-fetch_and_deploy_gh_release "romm" "rommapp/romm"
+fetch_and_deploy_gh_release "romm" "rommapp/romm" "tarball"
 
 msg_info "Creating environment file"
 sed -i 's/^supervised no/supervised systemd/' /etc/redis/redis.conf
@@ -176,12 +189,14 @@ $STD npm run build
 cp -rf /opt/romm/frontend/assets/* /opt/romm/frontend/dist/assets/
 
 mkdir -p /opt/romm/frontend/dist/assets/romm
-ln -sfn /var/lib/romm/resources /opt/romm/frontend/dist/assets/romm/resources
-ln -sfn /var/lib/romm/assets /opt/romm/frontend/dist/assets/romm/assets
+ROMM_BASE=$(grep '^ROMM_BASE_PATH=' /opt/romm/.env | cut -d'=' -f2)
+ROMM_BASE=${ROMM_BASE:-/var/lib/romm}
+ln -sfn "$ROMM_BASE"/resources /opt/romm/frontend/dist/assets/romm/resources
+ln -sfn "$ROMM_BASE"/assets /opt/romm/frontend/dist/assets/romm/assets
 msg_ok "Set up RomM Frontend"
 
-msg_info "Configuring Nginx"
-cat <<'EOF' >/etc/nginx/sites-available/romm
+msg_info "Configuring Angie"
+cat <<'EOF' >/etc/angie/http.d/romm.conf
 upstream romm_backend {
     server 127.0.0.1:5000;
 }
@@ -251,11 +266,11 @@ server {
 }
 EOF
 
-rm -f /etc/nginx/sites-enabled/default
-ln -sf /etc/nginx/sites-available/romm /etc/nginx/sites-enabled/romm
-systemctl restart nginx
-systemctl enable -q --now nginx
-msg_ok "Configured Nginx"
+sed -i "s|alias /var/lib/romm/library/;|alias ${ROMM_BASE}/library/;|" /etc/angie/http.d/romm.conf
+rm -f /etc/angie/http.d/default.conf
+systemctl restart angie
+systemctl enable -q --now angie
+msg_ok "Configured Angie"
 
 msg_info "Creating Services"
 cat <<EOF >/etc/systemd/system/romm-backend.service

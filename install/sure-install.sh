@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: vhsdream
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://sure.am
+# Source: https://sure.am | Github: https://github.com/we-promise/sure
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -26,7 +26,7 @@ fetch_and_deploy_gh_release "Sure" "we-promise/sure" "tarball" "latest" "/opt/su
 
 PG_VERSION="$(sed -n '/postgres:/s/[^[:digit:]]*//p' /opt/sure/compose.example.yml)" setup_postgresql
 PG_DB_NAME=sure_production PG_DB_USER=sure_user setup_postgresql_db
-RUBY_VERSION="$(cat /opt/sure/.ruby-version)" RUBY_INSTALL_RAILS=false setup_ruby
+RUBY_VERSION="$(cat /opt/sure/.ruby-version)" RUBY_INSTALL_RAILS=false HOME=/root setup_ruby
 
 msg_info "Building Sure"
 cd /opt/sure
@@ -55,7 +55,7 @@ POSTGRES_DB=${PG_DB_NAME}/" \
   -e "s|^APP_DOMAIN=|&${LOCAL_IP}|" /etc/sure/.env
 msg_ok "Configured Sure"
 
-msg_info "Creating Service"
+msg_info "Creating Services"
 cat <<EOF >/etc/systemd/system/sure.service
 [Unit]
 Description=Sure Service
@@ -73,14 +73,38 @@ ExecStartPre=/opt/sure/bin/rails db:prepare
 ExecStart=/opt/sure/bin/rails server
 Restart=always
 RestartSec=5
+TimeoutStartSec=300
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
-$STD systemctl enable -q --now sure
-msg_ok "Created Service"
+
+cat <<EOF >/etc/systemd/system/sure-worker.service
+[Unit]
+Description=Sure Background Worker (Sidekiq)
+After=network.target redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sure
+Environment=RAILS_ENV=production
+Environment=BUNDLE_DEPLOYMENT=1
+Environment=BUNDLE_WITHOUT=development
+Environment=PATH=/root/.rbenv/shims:/root/.rbenv/bin:/usr/bin:/usr/local/bin:/sbin:/bin
+EnvironmentFile=/etc/sure/.env
+ExecStart=/opt/sure/bin/bundle exec sidekiq -e production
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable -q --now sure sure-worker
+msg_ok "Created Services"
 
 motd_ssh
 customize

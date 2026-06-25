@@ -12,6 +12,7 @@ var_ram="${var_ram:-8192}"
 var_disk="${var_disk:-30}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -37,7 +38,7 @@ function update_script() {
   CURRENT_VERSION=$(apt list --installed 2>/dev/null | grep graylog-server | grep -oP '\d+\.\d+\.\d+')
 
   if dpkg --compare-versions "$CURRENT_VERSION" lt "6.3"; then
-    MONGO_VERSION="8.0" setup_mongodb
+    MONGO_VERSION="8.2" setup_mongodb
 
     msg_info "Updating Graylog"
     $STD apt update
@@ -64,10 +65,16 @@ function update_script() {
 }
 
 start
+
+if [[ $(sysctl -n vm.max_map_count 2>/dev/null) -lt 262144 ]]; then
+  sysctl -w vm.max_map_count=262144 >/dev/null 2>&1
+  echo "vm.max_map_count=262144" >/etc/sysctl.d/graylog.conf
+fi
+
 build_container
 description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:9000${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:9000${CL}"

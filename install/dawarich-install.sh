@@ -16,19 +16,23 @@ update_os
 msg_info "Installing Dependencies"
 $STD apt install -y \
   build-essential \
-  git \
-  libpq-dev \
-  libgeos-dev \
-  libyaml-dev \
-  libffi-dev \
-  libssl-dev \
-  libjemalloc2 \
-  imagemagick \
-  libmagickwand-dev \
-  libvips-dev \
   cmake \
-  redis-server \
-  nginx
+  git \
+  imagemagick \
+  libffi-dev \
+  libgeos-dev \
+  libgeos++-dev \
+  libjemalloc2 \
+  libjemalloc-dev \
+  libmagickwand-dev \
+  libpq-dev \
+  libssl-dev \
+  libvips-dev \
+  libxml2-dev \
+  libxslt-dev \
+  libyaml-dev \
+  nginx \
+  redis-server
 msg_ok "Installed Dependencies"
 
 PG_VERSION="17" PG_MODULES="postgis-3" setup_postgresql
@@ -42,10 +46,16 @@ msg_ok "Set up Directories"
 
 msg_info "Configuring Environment"
 SECRET_KEY_BASE=$(openssl rand -hex 64)
+OTP_ENCRYPTION_PRIMARY_KEY=$(openssl rand -hex 64)
+OTP_ENCRYPTION_DETERMINISTIC_KEY=$(openssl rand -hex 64)
+OTP_ENCRYPTION_KEY_DERIVATION_SALT=$(openssl rand -hex 64)
 RELEASE=$(get_latest_github_release "Freika/dawarich")
 cat <<EOF >/opt/dawarich/.env
 RAILS_ENV=production
 SECRET_KEY_BASE=${SECRET_KEY_BASE}
+OTP_ENCRYPTION_PRIMARY_KEY=${OTP_ENCRYPTION_PRIMARY_KEY}
+OTP_ENCRYPTION_DETERMINISTIC_KEY=${OTP_ENCRYPTION_DETERMINISTIC_KEY}
+OTP_ENCRYPTION_KEY_DERIVATION_SALT=${OTP_ENCRYPTION_KEY_DERIVATION_SALT}
 DATABASE_HOST=localhost
 DATABASE_USERNAME=${PG_DB_USER}
 DATABASE_PASSWORD=${PG_DB_PASS}
@@ -62,12 +72,12 @@ msg_ok "Configured Environment"
 
 NODE_VERSION="22" setup_nodejs
 RUBY_VERSION=$(cat /opt/dawarich/app/.ruby-version 2>/dev/null || echo "3.4.6")
-RUBY_VERSION=${RUBY_VERSION} RUBY_INSTALL_RAILS="false" setup_ruby
+RUBY_VERSION=${RUBY_VERSION} RUBY_INSTALL_RAILS="false" HOME=/root setup_ruby
 
 msg_info "Installing Dawarich"
 cd /opt/dawarich/app
 source /root/.profile
-export PATH="/root/.rbenv/shims:/root/.rbenv/bin:$PATH"
+export PATH="/root/.rbenv/shims:/root/.rbenv/bin:${PATH}"
 eval "$(/root/.rbenv/bin/rbenv init - bash)"
 set -a && source /opt/dawarich/.env && set +a
 $STD gem install bundler
@@ -82,7 +92,8 @@ elif [[ -f /opt/dawarich/app/package.json ]]; then
   $STD npm install
 fi
 $STD bundle exec rake assets:precompile
-$STD bundle exec rails db:prepare
+$STD bundle exec rails db:schema:load
+$STD bundle exec rails db:seed || msg_warn "Database seed failed (upstream rgeo-geojson issue), app will still work"
 $STD bundle exec rake data:migrate
 msg_ok "Installed Dawarich"
 

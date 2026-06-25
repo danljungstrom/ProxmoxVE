@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://grocy.info/
+# Source: https://grocy.info/ | Github: https://github.com/grocy/grocy
 
 APP="grocy"
 var_tags="${var_tags:-grocery;household}"
@@ -12,6 +12,7 @@ var_ram="${var_ram:-512}"
 var_disk="${var_disk:-2}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -28,8 +29,8 @@ function update_script() {
     exit
   fi
   php_ver=$(php -v | head -n 1 | awk '{print $2}')
-  if [[ ! $php_ver == "8.3"* ]]; then
-    PHP_VERSION="8.3" PHP_APACHE="YES" setup_php
+  if [[ ! $php_ver == "8.5"* ]]; then
+    PHP_VERSION="8.5" PHP_APACHE="YES" setup_php
   fi
   if check_for_gh_release "grocy" "grocy/grocy"; then
     msg_info "Updating grocy"
@@ -45,5 +46,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}${CL}"

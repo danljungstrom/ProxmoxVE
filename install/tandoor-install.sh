@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (Canbiz)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://tandoor.dev/
+# Source: https://tandoor.dev/ | Github: https://github.com/TandoorRecipes/recipes
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -47,6 +47,7 @@ $STD yarn install
 $STD yarn build
 cat <<EOF >/opt/tandoor/.env
 SECRET_KEY=$SECRET_KEY
+ALLOWED_HOSTS=$LOCAL_IP
 TZ=Europe/Berlin
 
 DB_ENGINE=django.db.backends.postgresql

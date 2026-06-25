@@ -12,6 +12,7 @@ var_ram="${var_ram:-512}"
 var_disk="${var_disk:-3}"
 var_os="${var_os:-alpine}"
 var_version="${var_version:-3.23}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -27,21 +28,22 @@ function update_script() {
   fi
 
   APIRELEASE=$(curl -s https://api.github.com/repos/lejianwen/rustdesk-api/releases/latest | grep "tag_name" | awk '{print substr($2, 3, length($2)-4) }')
-  RELEASE=$(curl -s https://api.github.com/repos/rustdesk/rustdesk-server/releases/latest | grep "tag_name" | awk '{print substr($2, 2, length($2)-3) }')
+  RELEASE=$(curl -s https://api.github.com/repos/lejianwen/rustdesk-server/releases/latest | grep "tag_name" | awk '{print substr($2, 2, length($2)-3) }')
   if [ "${RELEASE}" != "$(cat ~/.rustdesk-server 2>/dev/null)" ] || [ ! -f ~/.rustdesk-server ]; then
     msg_info "Updating RustDesk Server to v${RELEASE}"
     $STD apk -U upgrade
     $STD service rustdesk-server-hbbs stop
     $STD service rustdesk-server-hbbr stop
     temp_file1=$(mktemp)
-    curl -fsSL "https://github.com/rustdesk/rustdesk-server/releases/download/${RELEASE}/rustdesk-server-linux-amd64.zip" -o "$temp_file1"
+    ARCH=$(arch_resolve "amd64" "arm64v8")
+    curl -fsSL "https://github.com/lejianwen/rustdesk-server/releases/download/${RELEASE}/rustdesk-server-linux-${ARCH}.zip" -o "$temp_file1"
     $STD unzip "$temp_file1"
-    cp -r amd64/* /opt/rustdesk-server/
+    cp -r "$ARCH"/* /opt/rustdesk-server/
     echo "${RELEASE}" >~/.rustdesk-server
     $STD service rustdesk-server-hbbs start
     $STD service rustdesk-server-hbbr start
-    rm -rf amd64
-    rm -f $temp_file1
+    rm -rf "$ARCH"
+    rm -f "$temp_file1"
     msg_ok "Updated RustDesk Server"
   else
     msg_ok "No update required. ${APP} is already at v${RELEASE}"
@@ -50,13 +52,13 @@ function update_script() {
     msg_info "Updating RustDesk API to v${APIRELEASE}"
     $STD service rustdesk-api stop
     temp_file2=$(mktemp)
-    curl -fsSL "https://github.com/lejianwen/rustdesk-api/releases/download/v${APIRELEASE}/linux-amd64.tar.gz" -o "$temp_file2"
+    curl -fsSL "https://github.com/lejianwen/rustdesk-api/releases/download/v${APIRELEASE}/linux-$(arch_resolve).tar.gz" -o "$temp_file2"
     $STD tar zxvf "$temp_file2"
     cp -r release/* /opt/rustdesk-api
     echo "${APIRELEASE}" >~/.rustdesk-api
     $STD service rustdesk-api start
     rm -rf release
-    rm -f $temp_file2
+    rm -f "$temp_file2"
     msg_ok "Updated RustDesk API"
   else
     msg_ok "No update required. RustDesk API is already at v${APIRELEASE}"
@@ -71,5 +73,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following IP:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:21114${CL}"
+echo -e "${INFO}${YW}Access it using the following IP:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:21114${CL}"

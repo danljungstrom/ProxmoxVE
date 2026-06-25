@@ -7,13 +7,18 @@
 
 if ! command -v curl &>/dev/null; then
   printf "\r\e[2K%b" '\033[93m Setup Source \033[m' >&2
-  apt-get update >/dev/null 2>&1
-  apt-get install -y curl >/dev/null 2>&1
+  if [[ -f "/etc/alpine-release" ]]; then
+    apk -U add curl >/dev/null 2>&1
+  else
+    apt-get update >/dev/null 2>&1
+    apt-get install -y curl >/dev/null 2>&1
+  fi
 fi
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/core.func)
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/tools.func)
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/error_handler.func)
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "adguardhome-sync" "addon"
 
 # Enable error handling
 set -Eeuo pipefail
@@ -30,7 +35,6 @@ DEFAULT_PORT=8080
 
 # Initialize all core functions (colors, formatting, icons, STD mode)
 load_functions
-init_tool_telemetry "" "addon"
 
 # ==============================================================================
 # HEADER
@@ -51,7 +55,7 @@ EOF
 # HELPER FUNCTIONS
 # ==============================================================================
 get_ip() {
-  hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1"
+  hostname -I 2>/dev/null | awk '{print $1}' || ip -4 addr show scope global 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -n1 || echo "127.0.0.1"
 }
 
 # ==============================================================================
@@ -65,7 +69,17 @@ elif [[ -f "/etc/debian_version" ]]; then
   SERVICE_PATH="/etc/systemd/system/adguardhome-sync.service"
 else
   msg_error "Unsupported OS detected. Exiting."
-  exit 1
+  exit 238
+fi
+
+# ==============================================================================
+# DEPENDENCY CHECK
+# ==============================================================================
+if ! command -v jq &>/dev/null; then
+  printf "\r\e[2K%b" '\033[93m Installing jq \033[m' >&2
+  if [[ "$OS" == "Alpine" ]]; then
+    apk -U add jq >/dev/null 2>&1
+  fi
 fi
 
 # ==============================================================================
@@ -298,7 +312,7 @@ if [[ "${type:-}" == "update" ]]; then
     update
   else
     msg_error "${APP} is not installed. Nothing to update."
-    exit 1
+    exit 233
   fi
   exit 0
 fi

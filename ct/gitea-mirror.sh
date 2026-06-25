@@ -12,6 +12,7 @@ var_ram="${var_ram:-2048}"
 var_disk="${var_disk:-6}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -87,6 +88,8 @@ EOF
     msg_ok "Old Enviroment fixed"
   fi
 
+  ensure_dependencies git
+
   if check_for_gh_release "gitea-mirror" "RayLabsHQ/gitea-mirror"; then
     msg_info "Stopping Services"
     systemctl stop gitea-mirror
@@ -94,7 +97,7 @@ EOF
 
     msg_info "Backup Data"
     mkdir -p /opt/gitea-mirror-backup/data
-    cp /opt/gitea-mirror/data/* /opt/gitea-mirror-backup/data/
+    cp -r /opt/gitea-mirror/data/* /opt/gitea-mirror-backup/data/
     msg_ok "Backup Data"
 
     msg_info "Installing Bun"
@@ -111,12 +114,11 @@ EOF
     $STD bun run setup
     $STD bun run build
     APP_VERSION=$(grep -o '"version": *"[^"]*"' package.json | cut -d'"' -f4)
-
-    sudo sed -i.bak "s|^npm_package_version=.*|npm_package_version=${APP_VERSION}|" /opt/gitea-mirror.env
+    sed -i.bak "s|^npm_package_version=.*|npm_package_version=${APP_VERSION}|" /opt/gitea-mirror.env
     msg_ok "Updated and rebuilt ${APP}"
 
     msg_info "Restoring Data"
-    cp /opt/gitea-mirror-backup/data/* /opt/gitea-mirror/data
+    cp -r /opt/gitea-mirror-backup/data/* /opt/gitea-mirror/data
     msg_ok "Restored Data"
 
     msg_info "Starting Service"
@@ -133,5 +135,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:4321${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:4321${CL}"

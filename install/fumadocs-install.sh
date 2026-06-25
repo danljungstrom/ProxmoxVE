@@ -3,6 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Source: https://fumadocs.vercel.app/ | Github: https://github.com/fuma-nama/fumadocs
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -18,7 +19,7 @@ $STD apt install -y \
   git
 msg_ok "Installed Dependencies"
 
-NODE_VERSION="22" NODE_MODULE="pnpm" setup_nodejs
+NODE_VERSION="24" NODE_MODULE="pnpm" setup_nodejs
 
 msg_info "Preparing Fumadocs - "
 mkdir -p /opt/fumadocs

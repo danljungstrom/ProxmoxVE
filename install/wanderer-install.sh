@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: rrole
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://wanderer.to
+# Source: https://wanderer.to | Github: https://github.com/open-wanderer/wanderer
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -15,7 +15,11 @@ update_os
 
 setup_go
 NODE_VERSION="22" setup_nodejs
-fetch_and_deploy_gh_release "meilisearch" "meilisearch/meilisearch" "binary" "latest" "/opt/wanderer/source/search"
+if [[ "$(arch_resolve)" == "arm64" ]]; then
+  fetch_and_deploy_gh_release "meilisearch" "meilisearch/meilisearch" "singlefile" "latest" "/usr/local/bin" "meilisearch-linux-aarch64"
+else
+  fetch_and_deploy_gh_release "meilisearch" "meilisearch/meilisearch" "binary" "latest" "/opt/wanderer/source/search"
+fi
 mkdir -p /opt/wanderer/{source,data/pb_data,data/meili_data}
 fetch_and_deploy_gh_release "wanderer" "open-wanderer/wanderer" "tarball" "latest" "/opt/wanderer/source"
 
@@ -24,8 +28,7 @@ cd /opt/wanderer/source/db
 $STD go mod tidy
 $STD go build
 cd /opt/wanderer/source/web
-$STD npm ci -s vitest
-$STD npm ci --omit=dev
+$STD npm ci
 $STD npm run build
 msg_ok "Installed wanderer"
 
@@ -59,6 +62,16 @@ cd /opt/wanderer/source/web && node build &
 wait -n
 EOF
 chmod +x /opt/wanderer/start.sh
+
+cat <<'EOF' >/usr/local/bin/wanderer-pb
+#!/usr/bin/env bash
+set -a
+source /opt/wanderer/.env
+set +a
+cd /opt/wanderer/source/db
+exec ./pocketbase "$@" --dir="$PB_DB_LOCATION"
+EOF
+chmod +x /usr/local/bin/wanderer-pb
 
 cat <<EOF >/etc/systemd/system/wanderer-web.service
 [Unit]

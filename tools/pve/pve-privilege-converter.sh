@@ -25,7 +25,7 @@ header_info "$APP"
 check_root() {
   if [[ $EUID -ne 0 ]]; then
     msg_error "Script must be run as root"
-    exit 1
+    exit 104
   fi
 }
 
@@ -63,7 +63,7 @@ select_container() {
 
   if [[ ${#lxc_list[@]} -eq 0 ]]; then
     msg_error "No containers found"
-    exit 1
+    exit 234
   fi
 
   PS3="Enter number of container to convert: "
@@ -101,7 +101,7 @@ backup_container() {
   if [ -z "$BACKUP_PATH" ] || ! grep -q "Backup job finished successfully" "$vzdump_output"; then
     rm "$vzdump_output"
     msg_error "Backup failed"
-    exit 1
+    exit 235
   fi
   rm "$vzdump_output"
   msg_ok "Backup complete: $BACKUP_PATH"
@@ -126,7 +126,7 @@ perform_conversion() {
     msg_ok "Conversion successful"
   else
     msg_error "Conversion failed"
-    exit 1
+    exit 235
   fi
 }
 
@@ -134,16 +134,20 @@ manage_states() {
   read -rp "Shutdown source and start new container? [Y/n]: " answer
   answer=${answer:-Y}
   if [[ $answer =~ ^[Yy] ]]; then
-    pct shutdown "$CONTAINER_ID"
-    for i in {1..36}; do
-      sleep 5
-      ! pct status "$CONTAINER_ID" | grep -q running && break
-    done
     if pct status "$CONTAINER_ID" | grep -q running; then
-      read -rp "Timeout reached. Force shutdown? [Y/n]: " force
-      if [[ ${force:-Y} =~ ^[Yy] ]]; then
-        pkill -9 -f "lxc-start -F -n $CONTAINER_ID"
+      pct shutdown "$CONTAINER_ID"
+      for i in {1..36}; do
+        sleep 5
+        ! pct status "$CONTAINER_ID" | grep -q running && break
+      done
+      if pct status "$CONTAINER_ID" | grep -q running; then
+        read -rp "Timeout reached. Force shutdown? [Y/n]: " force
+        if [[ ${force:-Y} =~ ^[Yy] ]]; then
+          pkill -9 -f "lxc-start -F -n $CONTAINER_ID"
+        fi
       fi
+    else
+      msg_custom "ℹ️" "\e[36m" "Source container $CONTAINER_ID is already stopped"
     fi
     pct start "$NEW_CONTAINER_ID"
     msg_ok "New container started"

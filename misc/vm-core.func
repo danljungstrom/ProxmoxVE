@@ -42,7 +42,7 @@ get_header() {
 
   if [ ! -s "$local_header_path" ]; then
     if ! curl -fsSL "$header_url" -o "$local_header_path"; then
-      return 1
+      return 250
     fi
   fi
 
@@ -169,7 +169,7 @@ get_active_logfile() {
 # silent()
 #
 # - Executes command with output redirected to active log file
-# - On error: displays last 10 lines of log and exits with original exit code
+# - On error: displays last 20 lines of log and exits with original exit code
 # - Temporarily disables error trap to capture exit code correctly
 # - Sources explain_exit_code() for detailed error messages
 # ------------------------------------------------------------------------------
@@ -188,32 +188,18 @@ silent() {
   trap 'error_handler' ERR
 
   if [[ $rc -ne 0 ]]; then
-    # Source explain_exit_code if needed
-    if ! declare -f explain_exit_code >/dev/null 2>&1; then
-      source <(curl -fsSL https://git.community-scripts.org/community-scripts/ProxmoxVE/raw/branch/main/misc/error_handler.func) 2>/dev/null || true
-    fi
+    # Return instead of exit so that callers can use `$STD cmd || true`
+    # When no || is used, set -e + ERR trap catches it via error_handler()
+    export _SILENT_FAILED_RC="$rc"
+    export _SILENT_FAILED_CMD="$cmd"
+    export _SILENT_FAILED_LINE="$caller_line"
+    export _SILENT_FAILED_LOG="$logfile"
 
-    local explanation=""
-    if declare -f explain_exit_code >/dev/null 2>&1; then
-      explanation="$(explain_exit_code "$rc")"
-    fi
-
-    printf "\e[?25h"
-    if [[ -n "$explanation" ]]; then
-      msg_error "in line ${caller_line}: exit code ${rc} (${explanation})"
-    else
-      msg_error "in line ${caller_line}: exit code ${rc}"
-    fi
-    msg_custom "→" "${YWB}" "${cmd}"
-
-    if [[ -s "$logfile" ]]; then
-      echo -e "\n${TAB}--- Last 10 lines of log ---"
-      tail -n 10 "$logfile"
-      echo -e "${TAB}----------------------------\n"
-    fi
-
-    exit "$rc"
+    return "$rc"
   fi
+
+  # Clear stale flags on success
+  unset _SILENT_FAILED_RC _SILENT_FAILED_CMD _SILENT_FAILED_LINE _SILENT_FAILED_LOG 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------------------
@@ -244,7 +230,7 @@ curl_handler() {
 
   if [[ -z "$url" ]]; then
     msg_error "no valid url or option entered for curl_handler"
-    exit 1
+    exit 64
   fi
 
   $STD msg_info "Fetching: $url"
@@ -273,7 +259,7 @@ curl_handler() {
         rm -f /tmp/curl_error.log
       fi
       __curl_err_handler "$exit_code" "$url" "$curl_stderr"
-      exit 1 # hard exit if exit_code is not 0
+      exit "$exit_code"
     fi
 
     $STD printf "\r\033[K${INFO}${YW}Retry $attempt/$max_retries in ${delay}s...${CL}" >&2
@@ -316,7 +302,7 @@ __curl_err_handler() {
   esac
 
   [[ -n "$curl_msg" ]] && printf "%s\n" "$curl_msg" >&2
-  exit 1
+  exit "$exit_code"
 }
 
 # ------------------------------------------------------------------------------
@@ -331,7 +317,7 @@ shell_check() {
     msg_error "Your default shell is currently not set to Bash. To use these scripts, please switch to the Bash shell."
     echo -e "\nExiting..."
     sleep 2
-    exit
+    exit 103
   fi
 }
 
@@ -352,11 +338,11 @@ clear_line() {
 #
 # - Determines if script should run in verbose mode
 # - Checks VERBOSE and var_verbose variables
-# - Also returns true if not running in TTY (pipe/redirect scenario)
+# - Note: Non-TTY (pipe) scenarios are handled separately in msg_info()
 # ------------------------------------------------------------------------------
 is_verbose_mode() {
   local verbose="${VERBOSE:-${var_verbose:-no}}"
-  [[ "$verbose" != "no" || ! -t 2 ]]
+  [[ "$verbose" != "no" ]]
 }
 
 ### dev spinner ###
@@ -552,17 +538,17 @@ check_root() {
     msg_error "Please run this script as root."
     echo -e "\nExiting..."
     sleep 2
-    exit
+    exit 104
   fi
 }
 
 pve_check() {
-  if ! pveversion | grep -Eq "pve-manager/(8\.[1-4]|9\.[0-1])(\.[0-9]+)*"; then
+  if ! pveversion | grep -Eq "pve-manager/(8\.[1-4]|9\.[0-2])(\.[0-9]+)*"; then
     msg_error "This version of Proxmox Virtual Environment is not supported"
-    echo -e "Requires Proxmox Virtual Environment Version 8.1 - 8.4 or 9.0 - 9.1."
+    echo -e "Requires Proxmox Virtual Environment Version 8.1 - 8.4 or 9.0 - 9.2."
     echo -e "Exiting..."
     sleep 2
-    exit
+    exit 105
   fi
 }
 
@@ -572,37 +558,50 @@ arch_check() {
     echo -e "\n ${YWB}Visit https://github.com/asylumexp/Proxmox for ARM64 support. \n"
     echo -e "Exiting..."
     sleep 2
-    exit
+    exit 106
   fi
 }
 
 exit_script() {
   clear
   echo -e "\n${CROSS}${RD}User exited script${CL}\n"
-  exit
+  exit 0
 }
 
 check_hostname_conflict() {
   local hostname="$1"
   if qm list | awk '{print $2}' | grep -qx "$hostname"; then
     msg_error "Hostname $hostname already in use by another VM."
-    exit 1
+    exit 206
   fi
 }
 
 set_description() {
+  local app_name script_slug script_url donate_url
+  app_name=$(echo "${APP,,}" | tr ' ' '-')
+  script_slug="${SCRIPT_SLUG:-${app_name}}"
+  script_slug="$(echo "$script_slug" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')"
+  script_url="https://community-scripts.org/scripts/${script_slug}"
+  donate_url="https://community-scripts.org/donate"
+
   DESCRIPTION=$(
     cat <<EOF
 <div align='center'>
-  <a href='https://Helper-Scripts.com' target='_blank' rel='noopener noreferrer'>
+  <a href='https://community-scripts.org' target='_blank' rel='noopener noreferrer'>
     <img src='https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/images/logo-81x112.png' alt='Logo' style='width:81px;height:112px;'/>
   </a>
 
   <h2 style='font-size: 24px; margin: 20px 0;'>${NSAPP} VM</h2>
 
   <p style='margin: 16px 0;'>
-    <a href='https://ko-fi.com/community_scripts' target='_blank' rel='noopener noreferrer'>
-      <img src='https://img.shields.io/badge/&#x2615;-Buy us a coffee-blue' alt='spend Coffee' />
+    <a href='${donate_url}' target='_blank' rel='noopener noreferrer'>
+      <img src='https://img.shields.io/badge/❤️-Sponsoring%20%26%20Donations-FF5E5B' alt='Sponsoring and donations' />
+    </a>
+  </p>
+
+  <p style='margin: 12px 0;'>
+    <a href='${script_url}' target='_blank' rel='noopener noreferrer'>
+      <img src='https://img.shields.io/badge/📦-Open%20Script%20Page-00617f' alt='Open script page' />
     </a>
   </p>
 

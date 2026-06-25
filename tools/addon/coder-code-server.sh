@@ -2,8 +2,8 @@
 
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster)
-# License: MIT
-# https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Source: https://coder.com/ | Github: https://github.com/coder/code-server
 
 function header_info {
   cat <<"EOF"
@@ -89,18 +89,31 @@ VERSION=$(curl -fsSL https://api.github.com/repos/coder/code-server/releases/lat
   awk '{print substr($2, 3, length($2)-4) }')
 
 msg_info "Installing Code-Server v${VERSION}"
+config_path="${HOME}/.config/code-server/config.yaml"
+preexisting_config=false
+
+if [ -f "$config_path" ]; then
+  preexisting_config=true
+fi
+
 curl -fOL https://github.com/coder/code-server/releases/download/v"$VERSION"/code-server_"${VERSION}"_amd64.deb &>/dev/null
 dpkg -i code-server_"${VERSION}"_amd64.deb &>/dev/null
 rm -rf code-server_"${VERSION}"_amd64.deb
-mkdir -p ~/.config/code-server/
-systemctl enable -q --now code-server@"$USER"
-cat <<EOF >~/.config/code-server/config.yaml
+mkdir -p "${HOME}/.config/code-server/"
+
+if [ "$preexisting_config" = false ]; then
+cat <<EOF >"$config_path"
 bind-addr: 0.0.0.0:8680
 auth: none
 password: 
 cert: false
 EOF
+fi
+systemctl enable -q --now code-server@"$USER"
 systemctl restart code-server@"$USER"
+if ! systemctl is-active --quiet code-server@"$USER"; then
+  error_exit "code-server service failed to start."
+fi
 msg_ok "Installed Code-Server v${VERSION} on $hostname"
 
 echo -e "${APP} should be reachable by going to the following URL.

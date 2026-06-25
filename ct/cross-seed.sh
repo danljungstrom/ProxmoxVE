@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: Jakub Matraszek (jmatraszek)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://www.cross-seed.org
+# Source: https://www.cross-seed.org | Github: https://github.com/cross-seed/cross-seed
 
 APP="cross-seed"
 var_tags="${var_tags:-arr}"
@@ -12,6 +12,7 @@ var_ram="${var_ram:-1024}"
 var_disk="${var_disk:-2}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -20,26 +21,29 @@ color
 catch_errors
 
 function update_script() {
-    header_info
-    check_container_storage
-    check_container_resources
+  header_info
+  check_container_storage
+  check_container_resources
 
-    if command -v cross-seed &>/dev/null; then
-        current_version=$(cross-seed --version)
-        latest_version=$(npm show cross-seed version)
-        if [ "$current_version" != "$latest_version" ]; then
-            msg_info "Updating cross-seed from version v${current_version} to v${latest_version}"
-            $STD npm install -g cross-seed@latest
-            systemctl restart cross-seed
-            msg_ok "Updated successfully!"
-        else
-            msg_ok "cross-seed is already at v${current_version}"
-        fi
+  NODE_VERSION="24" setup_nodejs
+  ensure_dependencies build-essential
+
+  if command -v cross-seed &>/dev/null; then
+    current_version=$(cross-seed --version)
+    latest_version=$(npm show cross-seed version)
+    if [ "$current_version" != "$latest_version" ]; then
+      msg_info "Updating cross-seed from version v${current_version} to v${latest_version}"
+      $STD npm install -g cross-seed@latest
+      systemctl restart cross-seed
+      msg_ok "Updated successfully!"
     else
-        msg_error "No cross-seed Installation Found!"
-        exit
+      msg_ok "cross-seed is already at v${current_version}"
     fi
+  else
+    msg_error "No cross-seed Installation Found!"
     exit
+  fi
+  exit
 }
 
 start
@@ -49,4 +53,4 @@ description
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
 echo -e "${INFO}${YW} Access cross-seed API using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:2468${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:2468${CL}"

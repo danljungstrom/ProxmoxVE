@@ -15,26 +15,57 @@ update_os
 
 msg_info "Installing Dependencies"
 $STD apt install -y \
-    nginx \
-    valkey
+  nginx \
+  valkey \
+  mariadb-client \
+  rclone
 msg_ok "Installed Dependencies"
 
 PG_VERSION="17" setup_postgresql
 setup_go
-NODE_VERSION="24" setup_nodejs
+NODE_VERSION="24" NODE_MODULE="corepack" setup_nodejs
+
+msg_info "Installing Database Clients"
+# Create PostgreSQL version symlinks for compatibility
+for v in 12 13 14 15 16 18; do
+  ln -sf /usr/lib/postgresql/17 /usr/lib/postgresql/$v
+done
+# Install MongoDB Database Tools via direct .deb (no APT repo for Debian 13)
+[[ "$(get_os_info id)" == "ubuntu" ]] && MONGO_DIST="ubuntu2204" || MONGO_DIST="debian12"
+# MongoDB only publishes arm64 builds for Ubuntu
+[[ "$MONGO_ARCH" == "arm64" ]] && MONGO_DIST="ubuntu2204"
+MONGO_VERSION=$(get_latest_gh_tag "mongodb/mongo-tools" "100." || echo "100.16.1")
+fetch_and_deploy_from_url "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-${MONGO_DIST}-$(arch_resolve "x86_64" "arm64")-${MONGO_VERSION}.deb" ""
+mkdir -p /usr/local/mongodb-database-tools/bin
+[[ -f /usr/bin/mongodump ]] && ln -sf /usr/bin/mongodump /usr/local/mongodb-database-tools/bin/mongodump
+[[ -f /usr/bin/mongorestore ]] && ln -sf /usr/bin/mongorestore /usr/local/mongodb-database-tools/bin/mongorestore
+# Create MariaDB and MySQL client symlinks for compatibility
+mkdir -p /usr/local/mariadb-{10.6,12.1}/bin /usr/local/mysql-{5.7,8.0,8.4,9}/bin
+for dir in /usr/local/mariadb-{10.6,12.1}/bin; do
+  ln -sf /usr/bin/mariadb-dump "$dir/mariadb-dump"
+  ln -sf /usr/bin/mariadb "$dir/mariadb"
+done
+for dir in /usr/local/mysql-{5.7,8.0,8.4,9}/bin; do
+  ln -sf /usr/bin/mariadb-dump "$dir/mysqldump"
+  ln -sf /usr/bin/mariadb "$dir/mysql"
+done
+msg_ok "Installed Database Clients"
 
 fetch_and_deploy_gh_release "databasus" "databasus/databasus" "tarball" "latest" "/opt/databasus"
 
 msg_info "Building Databasus (Patience)"
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 cd /opt/databasus/frontend
-$STD npm ci
-$STD npm run build
+
+$STD corepack prepare pnpm@latest --activate
+$STD pnpm install --frozen-lockfile
+$STD pnpm run build
 cd /opt/databasus/backend
 $STD go mod tidy
 $STD go mod download
 $STD go install github.com/swaggo/swag/cmd/swag@latest
 $STD /root/go/bin/swag init -g cmd/main.go -o swagger
-$STD env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o databasus ./cmd/main.go
+$STD env CGO_ENABLED=0 GOOS=linux GOARCH=$(arch_resolve) go build -o databasus ./cmd/main.go
 mv /opt/databasus/backend/databasus /opt/databasus/databasus
 mkdir -p /databasus-data/{pgdata,temp,backups,data,logs}
 mkdir -p /opt/databasus/ui/build
@@ -47,14 +78,10 @@ msg_ok "Built Databasus"
 msg_info "Configuring Databasus"
 JWT_SECRET=$(openssl rand -hex 32)
 ENCRYPTION_KEY=$(openssl rand -hex 32)
-# Create PostgreSQL version symlinks for compatibility
-for v in 12 13 14 15 16 18; do
-  ln -sf /usr/lib/postgresql/17 /usr/lib/postgresql/$v
-done
 # Install goose for migrations
 $STD go install github.com/pressly/goose/v3/cmd/goose@latest
 ln -sf /root/go/bin/goose /usr/local/bin/goose
-cat <<EOF >/opt/databasus/.env
+cat <<EOF >/.env
 # Environment
 ENV_MODE=production
 
@@ -84,8 +111,7 @@ DATA_DIR=/databasus-data/data
 BACKUP_DIR=/databasus-data/backups
 LOG_DIR=/databasus-data/logs
 EOF
-chown postgres:postgres /opt/databasus/.env
-chmod 600 /opt/databasus/.env
+chmod 600 /.env
 msg_ok "Configured Databasus"
 
 msg_info "Configuring Valkey"
@@ -123,7 +149,7 @@ Requires=postgresql.service valkey.service
 [Service]
 Type=simple
 WorkingDirectory=/opt/databasus
-EnvironmentFile=/opt/databasus/.env
+EnvironmentFile=/.env
 ExecStart=/opt/databasus/databasus
 Restart=always
 RestartSec=5

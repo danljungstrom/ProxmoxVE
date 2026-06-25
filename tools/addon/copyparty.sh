@@ -14,12 +14,12 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/tools.func)
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/error_handler.func)
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "copyparty" "addon"
 
 # Enable error handling
 set -Eeuo pipefail
 trap 'error_handler' ERR
 load_functions
-init_tool_telemetry "" "addon"
 
 # ==============================================================================
 # CONFIGURATION
@@ -49,7 +49,7 @@ elif grep -qE 'ID=debian|ID=ubuntu' /etc/os-release; then
   SERVICE_PATH="/etc/systemd/system/copyparty.service"
 else
   msg_error "Unsupported OS detected. Exiting."
-  exit 1
+  exit 238
 fi
 
 # ==============================================================================
@@ -165,9 +165,9 @@ function install() {
   else
     read -rp "${TAB}Set admin username [admin]: " admin_user
     admin_user=${admin_user:-admin}
-    read -rsp "${TAB}Set admin password [helper-scripts.com]: " admin_pass
+    read -rsp "${TAB}Set admin password [community-scripts.org]: " admin_pass
     echo ""
-    admin_pass=${admin_pass:-helper-scripts.com}
+    admin_pass=${admin_pass:-community-scripts.org}
     msg_ok "Configured with admin user: ${admin_user}"
   fi
 
@@ -318,7 +318,7 @@ if [[ "${type:-}" == "update" ]]; then
     update
   else
     msg_error "${APP} is not installed. Nothing to update."
-    exit 1
+    exit 233
   fi
   exit 0
 fi

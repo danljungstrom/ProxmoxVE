@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://gethomepage.dev/
+# Source: https://gethomepage.dev/ | Github: https://github.com/gethomepage/homepage
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -25,6 +25,7 @@ msg_info "Installing Homepage (Patience)"
 mkdir -p /opt/homepage/config
 cd /opt/homepage
 cp /opt/homepage/src/skeleton/* /opt/homepage/config
+echo 'onlyBuiltDependencies=*' >> .npmrc
 $STD pnpm install
 export NEXT_PUBLIC_VERSION="v$RELEASE"
 export NEXT_PUBLIC_REVISION="source"
