@@ -35,3 +35,5 @@ vm/*.bak
 json/
 json/*.bak
 json/*.tmp
+# happier-dev fork: keep our tracked catalog metadata (upstream ignores json/)
+!json/happier.json

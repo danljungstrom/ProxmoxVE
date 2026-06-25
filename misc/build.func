@@ -88,16 +88,24 @@ variables() {
   fi
 }
 
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func)
+# happier-dev fork: route ALL framework + installer fetches below through an overridable
+# repo/ref (set by ct/happier.sh before this file is sourced). Defaults preserve upstream.
+# Exported so the in-container install.func (fetched via FUNCTIONS_FILE_PATH) inherits them
+# through lxc-attach and resolves its own fetches against the same fork ref.
+INSTALLER_REPO="${INSTALLER_REPO:-community-scripts/ProxmoxVE}"
+INSTALLER_REF="${INSTALLER_REF:-main}"
+export INSTALLER_REPO INSTALLER_REF
+
+source <(curl -fsSL https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/api.func)
 
 if command -v curl >/dev/null 2>&1; then
-  source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/core.func)
-  source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/error_handler.func)
+  source <(curl -fsSL https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/core.func)
+  source <(curl -fsSL https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/error_handler.func)
   load_functions
   catch_errors
 elif command -v wget >/dev/null 2>&1; then
-  source <(wget -qO- https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/core.func)
-  source <(wget -qO- https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/error_handler.func)
+  source <(wget -qO- https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/core.func)
+  source <(wget -qO- https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/error_handler.func)
   load_functions
   catch_errors
 fi
@@ -3808,7 +3816,7 @@ runtime_script_status_guard() {
 # ------------------------------------------------------------------------------
 
 start() {
-  source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/tools.func)
+  source <(curl -fsSL https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/tools.func)
   if command -v pveversion >/dev/null 2>&1; then
     runtime_script_status_guard || return 0
     install_script || return 0
@@ -4024,9 +4032,9 @@ build_container() {
   # Build PCT_OPTIONS as string for export
   local _func_url
   if [ "$var_os" == "alpine" ]; then
-    _func_url="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/alpine-install.func"
+    _func_url="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/alpine-install.func"
   else
-    _func_url="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/install.func"
+    _func_url="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/install.func"
   fi
   export FUNCTIONS_FILE_PATH="$(curl -fsSL "$_func_url")"
   if [[ -z "$FUNCTIONS_FILE_PATH" || ${#FUNCTIONS_FILE_PATH} -lt 100 ]]; then
@@ -4779,7 +4787,7 @@ EOF
     export CONTAINER_INSTALLING=true
 
     local _install_script
-    _install_script="$(curl -fsSL "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/install/${var_install}.sh")"
+    _install_script="$(curl -fsSL "https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/install/${var_install}.sh")"
     lxc-attach -n "$CTID" -- bash -c "$_install_script"
     local lxc_exit=$?
 
@@ -5103,7 +5111,7 @@ EOF
         if [[ "${DEV_MODE_MOTD:-false}" == "true" ]]; then
           echo -e "${TAB}${HOLD}${DGN}Setting up MOTD and SSH for debugging...${CL}"
           if pct exec "$CTID" -- bash -c "
-              source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/install.func)
+              source <(curl -fsSL https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/install.func)
               declare -f motd_ssh >/dev/null 2>&1 && motd_ssh || true
             " >/dev/null 2>&1; then
             local ct_ip=$(pct exec "$CTID" ip a s dev eth0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1)
@@ -5176,7 +5184,7 @@ EOF
           set +Eeuo pipefail
           trap - ERR
           local _install_script
-          _install_script="$(curl -fsSL "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/install/${var_install}.sh")"
+          _install_script="$(curl -fsSL "https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/install/${var_install}.sh")"
           lxc-attach -n "$CTID" -- bash -c "$_install_script"
           local apt_retry_exit=$?
           set -Eeuo pipefail
