@@ -1592,7 +1592,7 @@ cleanup_lxc() {
     $STD apk cache clean || true
     rm -rf /var/cache/apk/*
   else
-    # happier-dev fork: avoid indefinite hangs if apt/dpkg locks are held by background timers.
+    # Avoid indefinite hangs if apt/dpkg locks are held by background timers.
     if command -v timeout >/dev/null 2>&1; then
       $STD DEBIAN_FRONTEND=noninteractive timeout 300 apt-get -o DPkg::Lock::Timeout=60 -y autoremove 2>/dev/null || msg_warn "apt autoremove failed (non-critical)"
       $STD DEBIAN_FRONTEND=noninteractive timeout 300 apt-get -o DPkg::Lock::Timeout=60 -y autoclean 2>/dev/null || msg_warn "apt autoclean failed (non-critical)"

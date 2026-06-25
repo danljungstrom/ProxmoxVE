@@ -1,0 +1,52 @@
+{
+    "name": "Happier",
+    "slug": "happier",
+    "categories": [
+        20
+    ],
+    "date_created": "2026-02-07",
+    "type": "ct",
+    "updateable": true,
+    "privileged": false,
+    "interface_port": 3005,
+    "documentation": "https://happier.dev/docs/deployment/proxmox",
+    "website": "https://happier.dev",
+    "logo": "https://app.happier.dev/favicon.ico",
+    "config_path": "/etc/happier/server.env",
+    "description": "Happier is a self-hostable UI/CLI stack for monitoring and interacting with Claude Code, Codex, and Gemini sessions from a web UI and mobile.",
+    "install_methods": [
+        {
+            "type": "default",
+            "script": "ct/happier.sh",
+            "resources": {
+                "cpu": 4,
+                "ram": 8192,
+                "hdd": 32,
+                "os": "debian",
+                "version": "13"
+            }
+        }
+    ],
+    "default_credentials": {
+        "username": null,
+        "password": null
+    },
+    "notes": [
+        {
+            "text": "The Happier web UI requires HTTPS for remote access (secure context). Use Tailscale Serve or your reverse proxy.",
+            "type": "warning"
+        },
+        {
+            "text": "By default, this script installs Happier via the official CLI installer plus `happier relay host install` (recommended). For from-source installs, set HAPPIER_PVE_INSTALL_METHOD=from_source (uses `npx @happier-dev/stack hstack setup-from-source`).",
+            "type": "warning"
+        },
+        {
+            "text": "Optional: choose release channel by setting HAPPIER_PVE_CHANNEL=stable|preview|dev. Advanced from-source installs can override the bootstrap package via HAPPIER_PVE_STACK_PACKAGE='@happier-dev/stack@<tag-or-version>'.",
+            "type": "info"
+        },
+        {
+            "text": "Default local relay port is 3005 and can be overridden with HAPPIER_PVE_SERVER_PORT. Preview/dev installer-mode configs use channel-specific paths such as /etc/happier-preview/server.env and /etc/happier-dev/server.env.",
+            "type": "info"
+        }
+    ]
+}
