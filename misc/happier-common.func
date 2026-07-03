@@ -232,7 +232,11 @@ install_managed_ui_bundle() {
     exit 1
   fi
 
-  if ! resolve_happier_release_json_for_tags "${release_repo}" $(ui_release_tags_for_channel "${channel}") >"${release_json}"; then
+  local _ui_tags
+  _ui_tags="$(ui_release_tags_for_channel "${channel}")"
+  # _ui_tags is intentionally unquoted: the tags are passed as separate positional args
+  # (word-splitting is desired here; SC2086 is disabled repo-wide).
+  if ! resolve_happier_release_json_for_tags "${release_repo}" ${_ui_tags} >"${release_json}"; then
     msg_error "Unable to resolve a Happier UI release for channel ${channel}."
     rm -rf "${temp_dir}"
     exit 1

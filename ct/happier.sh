@@ -88,8 +88,21 @@ function update_script() {
     msg_ok "Updated ${APP} CLI"
 
     msg_info "Updating ${APP} relay host (channel: ${installer_channel})"
-    "${cli_bin}" relay host install --mode system --channel "${installer_channel}"
+    local relay_install_args=(relay host install --mode system --channel "${installer_channel}")
+    if systemctl is-active --quiet "$(channel_relay_service_name "${installer_channel}")-updater.timer" 2>/dev/null; then
+      relay_install_args+=(--auto-update)
+    fi
+    "${cli_bin}" "${relay_install_args[@]}"
     restart_happier_unit "$(channel_relay_service_name "${installer_channel}")"
+    # Devbox: the relay restart above does not cycle the daemon, so a CLI self-update
+    # leaves the running daemon on the old CLI. Restart it (no-op for server_only).
+    if "${cli_bin}" daemon status >/dev/null 2>&1; then
+      "${cli_bin}" daemon restart >/dev/null 2>&1 || true
+    else
+      local _daemon_unit
+      _daemon_unit="$(systemctl list-units --all --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
+      [[ -n "${_daemon_unit}" ]] && systemctl restart "${_daemon_unit}" >/dev/null 2>&1 || true
+    fi
     msg_ok "Updated ${APP}"
     exit
   fi
@@ -174,6 +187,13 @@ function app_questions() {
   HAPPIER_PVE_DAEMON_AUTH="0"
   HAPPIER_PVE_CHANNEL="${HAPPIER_PVE_CHANNEL:-${HAPPIER_PVE_HSTACK_CHANNEL:-stable}}"
   HAPPIER_PVE_STACK_PACKAGE="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}"
+  # Honor pre-set env for the new knobs: capture which were already provided so we
+  # can skip their prompts and preserve the supplied values (non-interactive use).
+  local _preset_agents="${HAPPIER_PVE_INSTALL_AGENTS+x}" _preset_pat="${HAPPIER_PVE_GITHUB_PAT+x}" _preset_au="${HAPPIER_PVE_AUTO_UPDATE+x}"
+  HAPPIER_PVE_INSTALL_AGENTS="${HAPPIER_PVE_INSTALL_AGENTS:-1}"
+  HAPPIER_PVE_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"
+  HAPPIER_PVE_AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"
+  HAPPIER_PVE_AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"
 
   HAPPIER_PVE_INSTALL_TYPE=$(
     whiptail --backtitle "$BACKTITLE" --title "HAPPIER" --radiolist \
@@ -251,12 +271,48 @@ function app_questions() {
     fi
   fi
 
+  if [[ "$HAPPIER_PVE_INSTALL_TYPE" == "devbox" ]]; then
+    if [[ -z "${_preset_agents}" ]]; then
+      if (whiptail --backtitle "$BACKTITLE" --title "AGENT CLIs" --yesno \
+        "\nInstall the claude and codex CLIs now?\n\nThe daemon needs them to run agent sessions. Choose No if you'll install them yourself.\n" 12 72); then
+        HAPPIER_PVE_INSTALL_AGENTS="1"
+      else
+        HAPPIER_PVE_INSTALL_AGENTS="0"
+      fi
+    fi
+    if [[ -z "${_preset_pat}" ]]; then
+      HAPPIER_PVE_GITHUB_PAT=$(
+        whiptail --backtitle "$BACKTITLE" --title "DAEMON GITHUB PAT" --passwordbox \
+          "\nOptional: GitHub Personal Access Token for the daemon's git operations.\n\nLeave blank to skip (you can add it later)." 12 72 3>&1 1>&2 2>&3
+      ) || HAPPIER_PVE_GITHUB_PAT=""
+    fi
+  fi
+
+  if [[ -z "${_preset_au}" ]]; then
+    if (whiptail --backtitle "$BACKTITLE" --title "AUTO-UPDATE" --yesno \
+      "\nEnable automatic updates?\n\nInstalls Happier's built-in updater timer (signature-verified, atomic, health-checked, auto-rollback). Default: No.\n" 13 72 --defaultno); then
+      HAPPIER_PVE_AUTO_UPDATE="1"
+      HAPPIER_PVE_AUTO_UPDATE_AT=$(
+        whiptail --backtitle "$BACKTITLE" --title "AUTO-UPDATE TIME" --inputbox \
+          "\nDaily update time (HH:MM, 24h):" 10 60 "${HAPPIER_PVE_AUTO_UPDATE_AT}" 3>&1 1>&2 2>&3
+      ) || HAPPIER_PVE_AUTO_UPDATE_AT="04:00"
+    else
+      HAPPIER_PVE_AUTO_UPDATE="0"
+    fi
+  fi
+
+  local _ch_stable="OFF" _ch_preview="OFF" _ch_dev="OFF"
+  case "${HAPPIER_PVE_CHANNEL}" in
+    stable) _ch_stable="ON" ;;
+    preview) _ch_preview="ON" ;;
+    dev) _ch_dev="ON" ;;
+  esac
   HAPPIER_PVE_CHANNEL=$(
     whiptail --backtitle "$BACKTITLE" --title "HAPPIER RELEASE CHANNEL" --radiolist \
       "\nChoose a release channel:\n\n- stable: recommended for production\n- preview: pre-release (newer, less tested)\n- dev: rolling/unstable; there is no hosted web UI unless you serve the UI locally\n" 20 72 3 \
-      "stable" "Stable (recommended)" $([[ "${HAPPIER_PVE_CHANNEL}" == "stable" ]] && echo ON || echo OFF) \
-      "preview" "Preview / pre-release" $([[ "${HAPPIER_PVE_CHANNEL}" == "preview" ]] && echo ON || echo OFF) \
-      "dev" "Dev / unstable" $([[ "${HAPPIER_PVE_CHANNEL}" == "dev" ]] && echo ON || echo OFF) \
+      "stable" "Stable (recommended)" "${_ch_stable}" \
+      "preview" "Preview / pre-release" "${_ch_preview}" \
+      "dev" "Dev / unstable" "${_ch_dev}" \
       3>&1 1>&2 2>&3
   ) || exit_script
 
@@ -279,6 +335,7 @@ function app_questions() {
   export HAPPIER_PVE_STACK_PACKAGE
   export HAPPIER_PVE_HSTACK_CHANNEL="${HAPPIER_PVE_CHANNEL}"
   export HAPPIER_PVE_HSTACK_PACKAGE="${HAPPIER_PVE_STACK_PACKAGE}"
+  export HAPPIER_PVE_INSTALL_AGENTS HAPPIER_PVE_GITHUB_PAT HAPPIER_PVE_AUTO_UPDATE HAPPIER_PVE_AUTO_UPDATE_AT
 }
 
 if command -v pveversion >/dev/null 2>&1; then

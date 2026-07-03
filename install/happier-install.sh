@@ -69,6 +69,14 @@ DAEMON_AUTH_DONE="0"
 HAPPIER_CHANNEL_RAW="${HAPPIER_PVE_CHANNEL:-${HAPPIER_PVE_HSTACK_CHANNEL:-stable}}" # stable | preview | dev
 STACK_PACKAGE_RAW="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}"    # e.g. @happier-dev/stack@latest
 SERVER_PORT_RAW="${HAPPIER_PVE_SERVER_PORT:-}"                                       # optional explicit PORT override
+INSTALL_AGENTS="${HAPPIER_PVE_INSTALL_AGENTS:-1}"      # 1 | 0 (install claude+codex on devbox)
+DAEMON_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"        # optional daemon GITHUB_PERSONAL_ACCESS_TOKEN
+AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"            # 1 | 0 (enable managed auto-update timer)
+AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"  # HH:MM for the auto-update timer
+if [[ "${AUTO_UPDATE}" == "1" && ! "${AUTO_UPDATE_AT}" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+  msg_warn "Invalid HAPPIER_PVE_AUTO_UPDATE_AT='${AUTO_UPDATE_AT}', falling back to 04:00"
+  AUTO_UPDATE_AT="04:00"
+fi
 TAILSCALE_ENABLE_SERVE="0"
 TAILSCALE_HTTPS_URL=""
 TAILSCALE_NEEDS_LOGIN="0"
@@ -502,6 +510,9 @@ install_managed_relay_runtime() {
   if [[ -n "${SERVER_PORT_RAW}" ]]; then
     relay_args+=(--env "PORT=${HAPPIER_SERVER_PORT}")
   fi
+  if [[ "${AUTO_UPDATE}" == "1" ]]; then
+    relay_args+=(--auto-update --auto-update-at="${AUTO_UPDATE_AT}")
+  fi
   if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
     relay_args+=(--env "HAPPIER_PUBLIC_SERVER_URL=${PUBLIC_URL}")
   fi
@@ -617,6 +628,77 @@ install_devbox_background_service() {
   msg_ok "Background service installed"
 }
 
+# Install the agent CLIs the daemon drives (claude, codex). npm-global so the
+# binaries are on PATH for the happier user too. The installers path doesn't bring
+# Node, so install it on demand when npm is missing (the from_source path already has it).
+# Non-fatal: a failure here still lets the daemon be wired to a later manual install.
+install_devbox_agents() {
+  if [[ "${INSTALL_AGENTS}" != "1" ]]; then
+    return 0
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    msg_info "Installing Node.js (required for agent CLIs)"
+    NODE_VERSION="24" setup_nodejs
+    msg_ok "Installed Node.js"
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    msg_warn "npm not available; skipping claude/codex install"
+    return 0
+  fi
+  msg_info "Installing agent CLIs (claude, codex)"
+  if $STD npm install -g @anthropic-ai/claude-code @openai/codex; then
+    msg_ok "Installed agent CLIs"
+  else
+    msg_warn "Agent CLI install failed (non-fatal) — install claude/codex manually and re-run update"
+  fi
+}
+
+# Write a chmod-600 systemd drop-in giving the daemon the agent paths (+ optional PAT).
+# Discovers the daemon unit created by `service install --mode system`; if none is found
+# yet, warns and skips rather than writing to a guessed path.
+write_daemon_env_dropin() {
+  local claude_path codex_path daemon_unit dropin_dir dropin
+  claude_path="$(command -v claude || true)"
+  codex_path="$(command -v codex || true)"
+
+  if [[ -z "${claude_path}" && -z "${codex_path}" && -z "${DAEMON_GITHUB_PAT}" ]]; then
+    msg_warn "No claude/codex found and no PAT provided; skipping daemon env drop-in"
+    return 0
+  fi
+
+  daemon_unit="$(systemctl list-unit-files --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
+  if [[ -z "${daemon_unit}" ]]; then
+    daemon_unit="$(systemctl list-units --all --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
+  fi
+  if [[ -z "${daemon_unit}" ]]; then
+    # No systemd unit (e.g. AUTOSTART=0 / manually-started daemon): a drop-in has nothing
+    # to attach to, so print the exact env to set before starting the daemon manually
+    # rather than silently dropping the wiring. (The PAT value is never printed.)
+    msg_warn "No daemon systemd unit found (autostart off / manual start) — set the daemon env yourself before 'happier daemon start':"
+    if [[ -n "${claude_path}" ]]; then echo "    export HAPPIER_CLAUDE_PATH=${claude_path}"; fi
+    if [[ -n "${codex_path}" ]]; then echo "    export HAPPIER_CODEX_PATH=${codex_path}"; fi
+    if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then echo "    export GITHUB_PERSONAL_ACCESS_TOKEN=<the token you provided>"; fi
+    return 0
+  fi
+
+  dropin_dir="/etc/systemd/system/${daemon_unit}.d"
+  dropin="${dropin_dir}/10-happier-agents.conf"
+  msg_info "Wiring daemon environment (${daemon_unit})"
+  mkdir -p "${dropin_dir}"
+  ( umask 077; {
+    printf '[Service]\n'
+    [[ -n "${claude_path}" ]] && printf 'Environment="HAPPIER_CLAUDE_PATH=%s"\n' "${claude_path}"
+    [[ -n "${codex_path}" ]] && printf 'Environment="HAPPIER_CODEX_PATH=%s"\n' "${codex_path}"
+    # NB: GitHub PATs are [A-Za-z0-9_] only; systemd Environment= treats % specially —
+    # don't reuse this line verbatim for secrets that may contain % or ".
+    [[ -n "${DAEMON_GITHUB_PAT}" ]] && printf 'Environment="GITHUB_PERSONAL_ACCESS_TOKEN=%s"\n' "${DAEMON_GITHUB_PAT}"
+  } >"${dropin}" ) || true
+  chmod 600 "${dropin}"
+  $STD systemctl daemon-reload || true
+  $STD systemctl restart "${daemon_unit}" || true
+  msg_ok "Wired daemon environment"
+}
+
 # Resolve the best client-facing URL to show the user before the QR appears.
 resolve_daemon_auth_server_url() {
   if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
@@ -708,6 +790,9 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
       msg_info "Autostart disabled: skipping background service install"
       msg_ok "Background service skipped"
     fi
+
+    install_devbox_agents
+    write_daemon_env_dropin
   fi
 
   # Post-install output: configure server → sign in/create → connect daemon/terminal.
@@ -1068,6 +1153,15 @@ if [[ "${AUTOSTART}" == "1" ]]; then
     restart_happier_unit "${STACK_LABEL}.service"
   fi
   msg_ok "Autostart enabled"
+fi
+
+# from_source devbox builds a daemon too: provision the agent CLIs and wire the daemon
+# env drop-in, mirroring the installers path. Placed after the stack service is installed
+# and STACK_ENV_FILE is written so the daemon unit exists for drop-in discovery (the helper
+# skips-with-warn if none is found). Auto-update stays relay/installers-only (not added here).
+if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
+  install_devbox_agents
+  write_daemon_env_dropin
 fi
 
 if [[ "${REMOTE_ACCESS}" == "tailscale" && "${TAILSCALE_ENABLE_SERVE}" == "1" ]]; then

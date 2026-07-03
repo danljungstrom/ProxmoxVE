@@ -47,6 +47,10 @@
         {
             "text": "Default local server port is 3005 and can be overridden with HAPPIER_PVE_SERVER_PORT (both install methods). The config_path /etc/happier/server.env applies to the default installer method; from-source installs store config at /home/happier/.happier/stacks/main/env instead. Preview/dev installer-mode configs use channel-specific paths such as /etc/happier-preview/server.env and /etc/happier-dev/server.env.",
             "type": "info"
+        },
+        {
+            "text": "Devbox extras (optional): HAPPIER_PVE_INSTALL_AGENTS=1 installs claude+codex; HAPPIER_PVE_GITHUB_PAT sets the daemon's GitHub token; HAPPIER_PVE_AUTO_UPDATE=1 (+HAPPIER_PVE_AUTO_UPDATE_AT=HH:MM, default 04:00) enables the built-in auto-update timer. A devbox runs agent sessions, so 8GB+ RAM is recommended.",
+            "type": "info"
         }
     ]
 }
