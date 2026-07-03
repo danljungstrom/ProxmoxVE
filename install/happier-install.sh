@@ -662,6 +662,11 @@ install_happier_cli_binary() {
       HAPPIER_NONINTERACTIVE="1" \
       $STD bash -s -- --channel "${HAPPIER_CHANNEL}"
 
+  # The bootstrap creates INSTALL_DIR mode 700 (it assumes its $HOME/.happier
+  # default, where private is right). With a system-wide /opt path the happier
+  # service user must be able to traverse it to run the CLI.
+  chmod 755 /opt/happier/cli 2>/dev/null || true
+
   resolve_installed_cli_path_or_fail
   msg_ok "Installed Happier CLI"
 }
@@ -793,9 +798,22 @@ install_devbox_background_service() {
   # (The from_source path sets it by hand only because its non-service nohup start
   # does not go through `service install`.)
   msg_info "Installing background service (devbox)"
+  # Runs as ROOT: current CLIs require root for --mode system (--system-user makes
+  # the unit run as happier). The CLI's post-install "daemon became active" check
+  # cannot pass before auth (WAIT_FOR_AUTH), so a non-zero exit here is expected —
+  # treat it as success when the unit actually got installed.
+  local svc_rc=0
   HOME="/home/happier" \
     HAPPIER_HOME_DIR="/home/happier/.happier" \
-    $STD sudo -u happier -H "${HAPPIER_CLI_BIN}" --server proxmox service install --mode system --system-user happier --yes </dev/null
+    $STD "${HAPPIER_CLI_BIN}" --server proxmox service install --mode system --system-user happier --yes </dev/null || svc_rc=$?
+  if [[ "${svc_rc}" -ne 0 ]]; then
+    if [[ -n "$(find_happier_daemon_unit)" ]]; then
+      msg_warn "Background service installed; daemon stays inactive until authenticated (CLI activation check rc=${svc_rc})."
+    else
+      msg_error "Background service install failed (rc=${svc_rc}) and no happier-daemon unit was created."
+      exit 1
+    fi
+  fi
   msg_ok "Background service installed"
 }
 
