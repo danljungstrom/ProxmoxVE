@@ -203,46 +203,79 @@ function update_script() {
 function app_questions() {
   local BACKTITLE="Proxmox VE Helper Scripts"
 
-  HAPPIER_PVE_INSTALL_TYPE=""
-  HAPPIER_PVE_SERVE_UI="1"
-  HAPPIER_PVE_AUTOSTART="1"
-  HAPPIER_PVE_REMOTE_ACCESS="none"
-  HAPPIER_PVE_TAILSCALE_AUTHKEY=""
-  HAPPIER_PVE_PUBLIC_URL=""
-  HAPPIER_PVE_DAEMON_AUTH="0"
+  # Honor pre-set env for EVERY knob: capture which were already provided so we
+  # can skip their prompts and preserve the supplied values. Presetting all of
+  # them yields a fully non-interactive install (build.func side: mode=default).
+  local _preset_type="${HAPPIER_PVE_INSTALL_TYPE+x}" _preset_ui="${HAPPIER_PVE_SERVE_UI+x}"
+  local _preset_autostart="${HAPPIER_PVE_AUTOSTART+x}" _preset_remote="${HAPPIER_PVE_REMOTE_ACCESS+x}"
+  local _preset_auth="${HAPPIER_PVE_DAEMON_AUTH+x}"
+  local _preset_channel="${HAPPIER_PVE_CHANNEL+x}${HAPPIER_PVE_HSTACK_CHANNEL+x}"
+  local _preset_agents="${HAPPIER_PVE_INSTALL_AGENTS+x}" _preset_pat="${HAPPIER_PVE_GITHUB_PAT+x}" _preset_au="${HAPPIER_PVE_AUTO_UPDATE+x}"
+
+  HAPPIER_PVE_INSTALL_TYPE="${HAPPIER_PVE_INSTALL_TYPE:-}"
+  HAPPIER_PVE_SERVE_UI="${HAPPIER_PVE_SERVE_UI:-1}"
+  HAPPIER_PVE_AUTOSTART="${HAPPIER_PVE_AUTOSTART:-1}"
+  HAPPIER_PVE_REMOTE_ACCESS="${HAPPIER_PVE_REMOTE_ACCESS:-none}"
+  HAPPIER_PVE_TAILSCALE_AUTHKEY="${HAPPIER_PVE_TAILSCALE_AUTHKEY:-}"
+  HAPPIER_PVE_PUBLIC_URL="${HAPPIER_PVE_PUBLIC_URL:-}"
+  HAPPIER_PVE_DAEMON_AUTH="${HAPPIER_PVE_DAEMON_AUTH:-0}"
   HAPPIER_PVE_CHANNEL="${HAPPIER_PVE_CHANNEL:-${HAPPIER_PVE_HSTACK_CHANNEL:-stable}}"
   HAPPIER_PVE_STACK_PACKAGE="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}"
-  # Honor pre-set env for the new knobs: capture which were already provided so we
-  # can skip their prompts and preserve the supplied values (non-interactive use).
-  local _preset_agents="${HAPPIER_PVE_INSTALL_AGENTS+x}" _preset_pat="${HAPPIER_PVE_GITHUB_PAT+x}" _preset_au="${HAPPIER_PVE_AUTO_UPDATE+x}"
   HAPPIER_PVE_INSTALL_AGENTS="${HAPPIER_PVE_INSTALL_AGENTS:-1}"
   HAPPIER_PVE_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"
   HAPPIER_PVE_AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"
   HAPPIER_PVE_AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"
 
-  HAPPIER_PVE_INSTALL_TYPE=$(
-    whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --radiolist \
-      "\nSelect installation type:\n" 12 72 2 \
-      "devbox" "Dev box (server-light + daemon) (recommended)" ON \
-      "server_only" "Server only (no daemon)" OFF \
-      3>&1 1>&2 2>&3
-  ) || exit_script
+  if [[ -z "${_preset_type}" ]]; then
+    HAPPIER_PVE_INSTALL_TYPE=$(
+      whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --radiolist \
+        "\nSelect installation type:\n" 12 72 2 \
+        "devbox" "Dev box (server-light + daemon) (recommended)" ON \
+        "server_only" "Server only (no daemon)" OFF \
+        3>&1 1>&2 2>&3
+    ) || exit_script
+  fi
+  case "${HAPPIER_PVE_INSTALL_TYPE}" in
+    devbox | server_only) ;;
+    *)
+      msg_error "Invalid HAPPIER_PVE_INSTALL_TYPE='${HAPPIER_PVE_INSTALL_TYPE}'. Use: devbox | server_only."
+      exit 1
+      ;;
+  esac
 
-  if (whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --yesno \
-    "\nServe the built Happier web UI from this machine?\n\nNote: for remote access, the UI requires HTTPS (Tailscale Serve or your reverse proxy).\n" 12 72); then
-    HAPPIER_PVE_SERVE_UI="1"
-  else
-    HAPPIER_PVE_SERVE_UI="0"
+  if [[ -z "${_preset_ui}" ]]; then
+    if (whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --yesno \
+      "\nServe the built Happier web UI from this machine?\n\nNote: for remote access, the UI requires HTTPS (Tailscale Serve or your reverse proxy).\n" 12 72); then
+      HAPPIER_PVE_SERVE_UI="1"
+    else
+      HAPPIER_PVE_SERVE_UI="0"
+    fi
   fi
 
-  if (whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --yesno \
-    "\nEnable autostart at boot?\n\nThis installs a systemd system service inside the container.\n" 12 72); then
-    HAPPIER_PVE_AUTOSTART="1"
-  else
-    HAPPIER_PVE_AUTOSTART="0"
+  if [[ -z "${_preset_autostart}" ]]; then
+    if (whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --yesno \
+      "\nEnable autostart at boot?\n\nThis installs a systemd system service inside the container.\n" 12 72); then
+      HAPPIER_PVE_AUTOSTART="1"
+    else
+      HAPPIER_PVE_AUTOSTART="0"
+    fi
   fi
 
-  while true; do
+  if [[ -n "${_preset_remote}" ]]; then
+    case "${HAPPIER_PVE_REMOTE_ACCESS}" in
+      tailscale | proxy | none) ;;
+      *)
+        msg_error "Invalid HAPPIER_PVE_REMOTE_ACCESS='${HAPPIER_PVE_REMOTE_ACCESS}'. Use: tailscale | proxy | none."
+        exit 1
+        ;;
+    esac
+    if [[ "${HAPPIER_PVE_REMOTE_ACCESS}" == "proxy" && -z "${HAPPIER_PVE_PUBLIC_URL}" ]]; then
+      msg_error "HAPPIER_PVE_REMOTE_ACCESS=proxy requires HAPPIER_PVE_PUBLIC_URL."
+      exit 1
+    fi
+  fi
+
+  while [[ -z "${_preset_remote}" ]]; do
     HAPPIER_PVE_REMOTE_ACCESS=$(
       whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --radiolist \
         "\nServer URL for QR/deep links (choose how other devices will reach this server):\n" 16 72 3 \
@@ -262,8 +295,6 @@ function app_questions() {
     fi
 
     if [[ "${HAPPIER_PVE_REMOTE_ACCESS}" == "tailscale" ]]; then
-      # shellcheck disable=SC2034 # consumed by build.func (enables the TUN device for the CT)
-      var_tun="yes"
       if (whiptail --backtitle "${BACKTITLE}" --title "TAILSCALE" --yesno \
         "\nProvide a Tailscale pre-auth key now?\n\nRecommended: use an ephemeral, one-time key.\n\nIf you skip this, the installer will still install Tailscale and you can run 'tailscale up' later inside the container.\n" 14 72); then
         HAPPIER_PVE_TAILSCALE_AUTHKEY=$(
@@ -286,9 +317,16 @@ function app_questions() {
     fi
   done
 
+  # The tailscale choice needs the TUN device regardless of how it was selected
+  # (prompt or preset env).
+  if [[ "${HAPPIER_PVE_REMOTE_ACCESS}" == "tailscale" ]]; then
+    # shellcheck disable=SC2034 # consumed by build.func (enables the TUN device for the CT)
+    var_tun="yes"
+  fi
+
   # Offer to authenticate the daemon interactively during install (devbox + UI only).
   # When enabled, the installer shows a QR code (hstack auth login) at the end of setup.
-  if [[ "${HAPPIER_PVE_INSTALL_TYPE}" == "devbox" && "${HAPPIER_PVE_SERVE_UI}" == "1" ]]; then
+  if [[ -z "${_preset_auth}" && "${HAPPIER_PVE_INSTALL_TYPE}" == "devbox" && "${HAPPIER_PVE_SERVE_UI}" == "1" ]]; then
     if (whiptail --backtitle "${BACKTITLE}" --title "DAEMON AUTH" --yesno \
       "\nAuthenticate the daemon during install?\n\nAfter setup completes, a QR code will appear.\nScan it with the Happier mobile app to authenticate the daemon.\n\nSelect No to skip and authenticate manually later.\n" 15 72); then
       HAPPIER_PVE_DAEMON_AUTH="1"
@@ -327,20 +365,26 @@ function app_questions() {
     fi
   fi
 
-  local _ch_stable="OFF" _ch_preview="OFF" _ch_dev="OFF"
-  case "${HAPPIER_PVE_CHANNEL}" in
-    stable) _ch_stable="ON" ;;
-    preview) _ch_preview="ON" ;;
-    dev) _ch_dev="ON" ;;
-  esac
-  HAPPIER_PVE_CHANNEL=$(
-    whiptail --backtitle "${BACKTITLE}" --title "HAPPIER RELEASE CHANNEL" --radiolist \
-      "\nChoose a release channel:\n\n- stable: recommended for production\n- preview: pre-release (newer, less tested)\n- dev: rolling/unstable; there is no hosted web UI unless you serve the UI locally\n" 20 72 3 \
-      "stable" "Stable (recommended)" "${_ch_stable}" \
-      "preview" "Preview / pre-release" "${_ch_preview}" \
-      "dev" "Dev / unstable" "${_ch_dev}" \
-      3>&1 1>&2 2>&3
-  ) || exit_script
+  if [[ -z "${_preset_channel}" ]]; then
+    local _ch_stable="OFF" _ch_preview="OFF" _ch_dev="OFF"
+    case "${HAPPIER_PVE_CHANNEL}" in
+      stable) _ch_stable="ON" ;;
+      preview) _ch_preview="ON" ;;
+      dev) _ch_dev="ON" ;;
+    esac
+    HAPPIER_PVE_CHANNEL=$(
+      whiptail --backtitle "${BACKTITLE}" --title "HAPPIER RELEASE CHANNEL" --radiolist \
+        "\nChoose a release channel:\n\n- stable: recommended for production\n- preview: pre-release (newer, less tested)\n- dev: rolling/unstable; there is no hosted web UI unless you serve the UI locally\n" 20 72 3 \
+        "stable" "Stable (recommended)" "${_ch_stable}" \
+        "preview" "Preview / pre-release" "${_ch_preview}" \
+        "dev" "Dev / unstable" "${_ch_dev}" \
+        3>&1 1>&2 2>&3
+    ) || exit_script
+  fi
+  HAPPIER_PVE_CHANNEL="$(normalize_happier_channel "${HAPPIER_PVE_CHANNEL}")" || {
+    msg_error "Invalid HAPPIER_PVE_CHANNEL='${HAPPIER_PVE_CHANNEL}'. Use: stable | preview | dev."
+    exit 1
+  }
 
   HAPPIER_PVE_STACK_PACKAGE="$(channel_default_stack_package "${HAPPIER_PVE_CHANNEL}" "${HAPPIER_PVE_STACK_PACKAGE}")"
 
