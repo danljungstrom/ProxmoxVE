@@ -695,7 +695,15 @@ install_managed_relay_runtime() {
     relay_args+=(--env "PORT=${HAPPIER_SERVER_PORT}")
   fi
   if [[ "${AUTO_UPDATE}" == "1" ]]; then
-    relay_args+=(--auto-update --auto-update-at="${AUTO_UPDATE_AT}")
+    # Capability probe: released CLIs may not know the auto-update flags yet
+    # (`relay host install` rejects unknown arguments). Degrade with a warning
+    # instead of failing the whole install.
+    if "${HAPPIER_CLI_BIN}" relay host install --help 2>&1 | grep -q -- '--auto-update'; then
+      relay_args+=(--auto-update --auto-update-at="${AUTO_UPDATE_AT}")
+    else
+      msg_warn "This Happier CLI version does not support --auto-update yet; skipping the auto-update timer (update manually or re-run update after a CLI upgrade)."
+      AUTO_UPDATE="0"
+    fi
   fi
   if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
     relay_args+=(--env "HAPPIER_PUBLIC_SERVER_URL=${PUBLIC_URL}")
