@@ -357,7 +357,7 @@ git commit -m "docs(happier): document devbox/auto-update install knobs"
 
 - [x] `bash -n ct/happier.sh install/happier-install.sh` → exit 0.
 - [x] `shellcheck` on both (honoring `.shellcheckrc`) → no new errors. (The `happier-lint` workflow runs this on the eventual PR.)
-- [ ] **LXC integration matrix** from the spec (cases 1-6): real devbox install with agents on/off, PAT via env, auto-update on/off, run the Update action, and a server_only regression check. Confirm: drop-in exists at mode 600 with the expected keys; `command -v claude/codex` resolve; `<serviceName>-updater.timer` active iff auto-update on; daemon + relay both restart on update without killing a live session; server_only touches none of it. A health probe should now report `daemon_required_env` satisfied.
+- [x] **LXC integration matrix** (run 2026-07-03, see docs/audits/2026-07-03-lxc-matrix.md) from the spec (cases 1-6): real devbox install with agents on/off, PAT via env, auto-update on/off, run the Update action, and a server_only regression check. Confirm: drop-in exists at mode 600 with the expected keys; `command -v claude/codex` resolve; `<serviceName>-updater.timer` active iff auto-update on; daemon + relay both restart on update without killing a live session; server_only touches none of it. A health probe should now report `daemon_required_env` satisfied.
 - [ ] Only after LXC-green: PR `feat/devbox-agents-autoupdate` → `happier-dev/main` (cross-fork from the `danljungstrom` fork), after the audit/sync PRs land.
 
 ## Spec coverage map
