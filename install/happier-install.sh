@@ -782,6 +782,10 @@ fi
 if [[ "${SERVE_UI}" != "1" ]]; then
   SETUP_ENV+=("HAPPIER_STACK_SERVE_UI=0")
 fi
+if [[ -n "${SERVER_PORT_RAW}" ]]; then
+  # from_source server binds HAPPIER_STACK_SERVER_PORT (not PORT); honor the override.
+  SETUP_ENV+=("HAPPIER_STACK_SERVER_PORT=${HAPPIER_SERVER_PORT}")
+fi
 
 SETUP_ARGS=()
 SETUP_ARGS+=("--profile=selfhost")
@@ -916,6 +920,10 @@ if [[ "${SERVE_UI}" != "1" ]]; then
 fi
 if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
   set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH" "1"
+fi
+if [[ -n "${SERVER_PORT_RAW}" ]]; then
+  # Persist the port override so the from_source server actually binds it on start.
+  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_SERVER_PORT" "${HAPPIER_SERVER_PORT}"
 fi
 
 # Set a best-effort server URL early so autostart/manual start uses it on first boot.

@@ -45,7 +45,7 @@
             "type": "info"
         },
         {
-            "text": "Default local relay port is 3005 and can be overridden with HAPPIER_PVE_SERVER_PORT. Preview/dev installer-mode configs use channel-specific paths such as /etc/happier-preview/server.env and /etc/happier-dev/server.env.",
+            "text": "Default local server port is 3005 and can be overridden with HAPPIER_PVE_SERVER_PORT (both install methods). The config_path /etc/happier/server.env applies to the default installer method; from-source installs store config at /home/happier/.happier/stacks/main/env instead. Preview/dev installer-mode configs use channel-specific paths such as /etc/happier-preview/server.env and /etc/happier-dev/server.env.",
             "type": "info"
         }
     ]
