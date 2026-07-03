@@ -1,0 +1,75 @@
+# happier-dev fork: lint/validate the happier helper scripts + the fork's framework patches.
+# Fork-owned (NOT gated to community-scripts), so it actually runs on this repo's PRs —
+# the upstream script-test/script_format workflows are gated to community-scripts and parked
+# under .github/workflows/bak/, so nothing lints these files without this.
+# Note: uses no untrusted github.event.* inputs (no injection surface).
+name: happier-lint
+
+on:
+  pull_request:
+    paths:
+      - "ct/happier.sh"
+      - "install/happier-install.sh"
+      - "misc/happier-common.func"
+      - "misc/build.func"
+      - "misc/core.func"
+      - "misc/install.func"
+      - "json/happier.json"
+      - ".github/workflows/happier-lint.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ct/happier.sh"
+      - "install/happier-install.sh"
+      - "misc/happier-common.func"
+      - "misc/build.func"
+      - "misc/core.func"
+      - "misc/install.func"
+      - "json/happier.json"
+      - ".github/workflows/happier-lint.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      # Scripts that are fork-owned and safe to fully lint.
+      HAPPIER_SCRIPTS: "ct/happier.sh install/happier-install.sh"
+      # Upstream framework files the fork patches — syntax-check only (full shellcheck
+      # would flood with pre-existing upstream findings unrelated to our changes).
+      PATCHED_FUNCS: "misc/build.func misc/core.func misc/install.func"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n (syntax) — scripts + patched func files
+        run: |
+          rc=0
+          for f in $HAPPIER_SCRIPTS misc/happier-common.func $PATCHED_FUNCS; do
+            if bash -n "$f"; then echo "ok: $f"; else echo "SYNTAX FAIL: $f"; rc=1; fi
+          done
+          exit $rc
+
+      - name: shellcheck (happier scripts, honoring .shellcheckrc)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          # Reuse the repo-root shellcheck exclude list so CI matches local expectations.
+          EXCLUDES="$(grep -oE 'disable=[A-Z0-9,]+' .shellcheckrc 2>/dev/null | cut -d= -f2 | paste -sd, - || true)"
+          echo "excludes: ${EXCLUDES:-none}"
+          rc=0
+          for f in $HAPPIER_SCRIPTS; do
+            shellcheck ${EXCLUDES:+-e "$EXCLUDES"} -S warning "$f" || rc=1
+          done
+          exit $rc
+
+      - name: shfmt diff (informational — happier scripts, 2-space)
+        continue-on-error: true
+        run: |
+          curl -fsSL "https://github.com/mvdan/sh/releases/latest/download/shfmt_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64" -o /tmp/shfmt
+          chmod +x /tmp/shfmt && sudo mv /tmp/shfmt /usr/local/bin/shfmt
+          shfmt -i 2 -ci -d $HAPPIER_SCRIPTS || true
+
+      - name: validate json/happier.json
+        run: |
+          python3 -c "import json; json.load(open('json/happier.json')); print('json valid')"
