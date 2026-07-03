@@ -3,6 +3,10 @@
 # the upstream script-test/script_format workflows are gated to community-scripts and parked
 # under .github/workflows/bak/, so nothing lints these files without this.
 # Note: uses no untrusted github.event.* inputs (no injection surface).
+#
+# Tool pinning: shellcheck and shfmt are downloaded as pinned releases with sha256
+# verification (apt's shellcheck lags years behind; releases/latest drifts silently).
+# Bump the *_VERSION/*_SHA256 pairs together, deliberately.
 name: happier-lint
 
 on:
@@ -15,6 +19,7 @@ on:
       - "misc/core.func"
       - "misc/install.func"
       - "json/happier.json"
+      - "tests/happier/**"
       - ".github/workflows/happier-lint.yml"
   push:
     branches: [main]
@@ -26,6 +31,7 @@ on:
       - "misc/core.func"
       - "misc/install.func"
       - "json/happier.json"
+      - "tests/happier/**"
       - ".github/workflows/happier-lint.yml"
 
 permissions:
@@ -35,41 +41,74 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     env:
-      # Scripts that are fork-owned and safe to fully lint.
-      HAPPIER_SCRIPTS: "ct/happier.sh install/happier-install.sh"
+      # Fork-owned files, fully linted (shellcheck --norc -S info, no excludes:
+      # they are clean at that level; intentional deviations carry per-line
+      # `# shellcheck disable=` directives with an explanation).
+      HAPPIER_SCRIPTS: "ct/happier.sh install/happier-install.sh misc/happier-common.func"
       # Upstream framework files the fork patches — syntax-check only (full shellcheck
       # would flood with pre-existing upstream findings unrelated to our changes).
       PATCHED_FUNCS: "misc/build.func misc/core.func misc/install.func"
+      SHELLCHECK_VERSION: "v0.11.0"
+      SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+      SHFMT_VERSION: "v3.13.1"
+      SHFMT_SHA256: "fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: bash -n (syntax) — scripts + patched func files
+      - name: bash -n (syntax) — scripts + patched func files + tests
         run: |
           rc=0
-          for f in $HAPPIER_SCRIPTS misc/happier-common.func $PATCHED_FUNCS; do
+          for f in $HAPPIER_SCRIPTS $PATCHED_FUNCS tests/happier/*.sh; do
             if bash -n "$f"; then echo "ok: $f"; else echo "SYNTAX FAIL: $f"; rc=1; fi
           done
           exit $rc
 
-      - name: shellcheck (happier scripts, honoring .shellcheckrc)
+      - name: install pinned shellcheck + shfmt (sha256-verified)
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          # Reuse the repo-root shellcheck exclude list so CI matches local expectations.
-          EXCLUDES="$(grep -oE 'disable=[A-Z0-9,]+' .shellcheckrc 2>/dev/null | cut -d= -f2 | paste -sd, - || true)"
-          echo "excludes: ${EXCLUDES:-none}"
+          curl -fsSL --retry 3 -o /tmp/sc.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          curl -fsSL --retry 3 -o /tmp/shfmt \
+            "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64"
+          echo "${SHFMT_SHA256}  /tmp/shfmt" | sha256sum -c -
+          chmod +x /tmp/shfmt && sudo mv /tmp/shfmt /usr/local/bin/shfmt
+          shellcheck --version && shfmt --version
+
+      - name: shellcheck (fork-owned files, no excludes)
+        run: |
+          # --norc: the repo-root .shellcheckrc carries broad excludes for the
+          # upstream-patched framework files; the fork-owned files are held to the
+          # full ruleset at info severity.
           rc=0
-          for f in $HAPPIER_SCRIPTS; do
-            shellcheck ${EXCLUDES:+-e "$EXCLUDES"} -S warning "$f" || rc=1
+          for f in $HAPPIER_SCRIPTS tests/happier/*.sh; do
+            shellcheck --norc -S info "$f" || rc=1
           done
           exit $rc
 
-      - name: shfmt diff (informational — happier scripts, 2-space)
+      - name: shfmt diff (informational — fork-owned files, 2-space)
         continue-on-error: true
-        run: |
-          curl -fsSL "https://github.com/mvdan/sh/releases/latest/download/shfmt_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64" -o /tmp/shfmt
-          chmod +x /tmp/shfmt && sudo mv /tmp/shfmt /usr/local/bin/shfmt
-          shfmt -i 2 -ci -d $HAPPIER_SCRIPTS || true
+        run: shfmt -i 2 -ci -d $HAPPIER_SCRIPTS tests/happier/*.sh
 
-      - name: validate json/happier.json
+      - name: happier test suite (channel helpers, validators, UI-bundle verify)
         run: |
-          python3 -c "import json; json.load(open('json/happier.json')); print('json valid')"
+          # minisign enables the real-crypto tier of the UI-bundle verify tests.
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          bash tests/happier/run.sh
+
+      - name: validate json/happier.json (parse + installer contract)
+        run: |
+          python3 - <<'PY'
+          import json
+          d = json.load(open('json/happier.json'))
+          assert d['name'] == 'Happier' and d['slug'] == 'happier', 'name/slug'
+          assert d['type'] == 'ct', 'type'
+          assert isinstance(d['interface_port'], int), 'interface_port'
+          m = d['install_methods']
+          assert m and m[0]['script'] == 'ct/happier.sh', 'install_methods script'
+          r = m[0]['resources']
+          assert all(k in r for k in ('cpu', 'ram', 'hdd', 'os', 'version')), 'resources'
+          assert d['notes'] and all(n.get('text') and n.get('type') in ('info', 'warning') for n in d['notes']), 'notes'
+          print('json valid + installer contract fields OK')
+          PY
