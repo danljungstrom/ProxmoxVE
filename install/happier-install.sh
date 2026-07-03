@@ -7,6 +7,21 @@
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 
+# Shared Happier helpers (channel/UI-bundle/CLI resolvers + pinned minisign key).
+# Fetched and sourced AFTER FUNCTIONS_FILE_PATH so the framework msg_* helpers
+# are available. INSTALLER_REPO/INSTALLER_REF are inherited from build.func via
+# lxc-attach (the shared file also defaults them when sourced standalone).
+HAPPIER_COMMON_FUNC_URL="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/happier-common.func"
+HAPPIER_COMMON_FUNC="$(curl -fsSL "${HAPPIER_COMMON_FUNC_URL}")" || {
+  msg_error "Failed to download happier-common.func from: ${HAPPIER_COMMON_FUNC_URL}"
+  exit 1
+}
+if [[ -z "${HAPPIER_COMMON_FUNC//[[:space:]]/}" ]]; then
+  msg_error "Downloaded happier-common.func is empty: ${HAPPIER_COMMON_FUNC_URL}"
+  exit 1
+fi
+source /dev/stdin <<<"${HAPPIER_COMMON_FUNC}"
+
 # Used by community-scripts helpers (e.g. motd_ssh in misc/install.func).
 APP="Happier"
 app="${app:-happier}"
@@ -62,15 +77,6 @@ TAILSCALE_AUTH_URL=""
 HAPPIER_CLI_BIN=""
 HAPPIER_CLI_NAME=""
 HAPPIER_SERVER_PORT="${SERVER_PORT_RAW:-3005}"
-DEFAULT_MINISIGN_PUBKEY="$(cat <<'EOF'
-untrusted comment: minisign public key 91AE28177BF6E43C
-RWQ85PZ7FyiukYbL3qv/bKnwgbT68wLVzotapeMFIb8n+c7pBQ7U8W2t
-EOF
-)"
-MINISIGN_PUBKEY="${HAPPIER_MINISIGN_PUBKEY:-${DEFAULT_MINISIGN_PUBKEY}}"
-if [[ -n "${HAPPIER_MINISIGN_PUBKEY:-}" && "${HAPPIER_MINISIGN_PUBKEY}" != "${DEFAULT_MINISIGN_PUBKEY}" ]]; then
-  msg_warn "Using a NON-DEFAULT minisign signing key (HAPPIER_MINISIGN_PUBKEY) — the bundle signature trust anchor is overridden."
-fi
 
 normalize_url_no_trailing_slash() {
   local v
@@ -106,67 +112,6 @@ path = u.path or ""
 out = f"https://{host}{port}{path}".rstrip("/")
 print(out, end="")
 PY
-}
-
-normalize_happier_channel() {
-  local raw
-  raw="$(printf '%s' "$1" | tr -d '\r' | xargs | tr '[:upper:]' '[:lower:]')"
-  case "${raw}" in
-    ""|stable)
-      printf '%s' "stable"
-      ;;
-    preview)
-      printf '%s' "preview"
-      ;;
-    dev|publicdev)
-      printf '%s' "dev"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-channel_cli_name() {
-  case "$1" in
-    stable) printf '%s' "happier" ;;
-    preview) printf '%s' "hprev" ;;
-    dev) printf '%s' "hdev" ;;
-    *) return 1 ;;
-  esac
-}
-
-channel_suffix() {
-  case "$1" in
-    stable) printf '%s' "" ;;
-    preview) printf '%s' "-preview" ;;
-    dev) printf '%s' "-dev" ;;
-    *) return 1 ;;
-  esac
-}
-
-channel_relay_service_name() {
-  local suffix=""
-  suffix="$(channel_suffix "$1")" || return 1
-  printf '%s' "happier-server${suffix}"
-}
-
-channel_data_dir() {
-  local suffix=""
-  suffix="$(channel_suffix "$1")" || return 1
-  printf '%s' "/var/lib/happier${suffix}"
-}
-
-channel_ui_current_dir() {
-  printf '%s' "$(channel_data_dir "$1")/ui-web/current"
-}
-
-channel_hosted_webapp_url() {
-  case "$1" in
-    stable|preview) printf '%s' "https://app.happier.dev" ;;
-    dev) printf '%s' "" ;;
-    *) return 1 ;;
-  esac
 }
 
 extract_https_url_from_text() {
@@ -222,92 +167,6 @@ resolve_tailscale_https_url_with_retries() {
   return 1
 }
 
-ui_release_tags_for_channel() {
-  case "$1" in
-    stable) printf '%s\n' "ui-web-stable" ;;
-    preview) printf '%s\n' "ui-web-preview" "ui-web-stable" ;;
-    dev) printf '%s\n' "ui-web-dev" "ui-web-preview" "ui-web-stable" ;;
-    *) return 1 ;;
-  esac
-}
-
-happier_github_curl() {
-  local mode="$1"
-  local url="$2"
-  local destination="${3:-}"
-  local config_path=""
-  local status=0
-
-  if [[ -n "${HAPPIER_GITHUB_TOKEN:-}" ]]; then
-    config_path="$(mktemp)"
-    chmod 600 "${config_path}" >/dev/null 2>&1 || true
-    {
-      printf '%s\n' "header = \"Authorization: Bearer ${HAPPIER_GITHUB_TOKEN}\""
-      printf '%s\n' 'header = "Accept: application/vnd.github+json"'
-      printf '%s\n' 'header = "X-GitHub-Api-Version: 2022-11-28"'
-    } >"${config_path}"
-  fi
-
-  if [[ "${mode}" == "stdout" ]]; then
-    if [[ -n "${config_path}" ]]; then
-      curl -fsSL --config "${config_path}" "${url}"
-      status=$?
-    else
-      curl -fsSL \
-        -H "Accept: application/vnd.github+json" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        "${url}"
-      status=$?
-    fi
-  else
-    if [[ -z "${destination}" ]]; then
-      msg_error "Destination path is required for Happier GitHub downloads."
-      [[ -n "${config_path}" ]] && rm -f "${config_path}"
-      return 1
-    fi
-    if [[ -n "${config_path}" ]]; then
-      curl -fsSL --config "${config_path}" "${url}" -o "${destination}"
-      status=$?
-    else
-      curl -fsSL "${url}" -o "${destination}"
-      status=$?
-    fi
-  fi
-
-  [[ -n "${config_path}" ]] && rm -f "${config_path}"
-  return "${status}"
-}
-
-resolve_happier_release_json_for_tags() {
-  local release_repo="$1"
-  shift
-  local tag=""
-  local api_url=""
-  for tag in "$@"; do
-    [[ -z "${tag}" ]] && continue
-    api_url="https://api.github.com/repos/${release_repo}/releases/tags/${tag}"
-    if happier_github_curl stdout "${api_url}"; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-resolve_ui_extract_root() {
-  local extract_dir="$1"
-  if [[ -f "${extract_dir}/index.html" ]]; then
-    printf '%s' "${extract_dir}"
-    return 0
-  fi
-  local index_path=""
-  index_path="$(find "${extract_dir}" -mindepth 1 -maxdepth 2 -type f -name index.html 2>/dev/null | head -n 1 || true)"
-  if [[ -n "${index_path}" ]]; then
-    dirname "${index_path}"
-    return 0
-  fi
-  return 1
-}
-
 # Install the Tailscale apt repo + package. Uses Tailscale's current keyring +
 # .list files (fetched to temp and verified non-empty) so a transient network
 # failure produces an actionable error instead of a half-written keyring/source.
@@ -345,112 +204,138 @@ install_tailscale_pkg() {
   systemctl enable -q --now tailscaled
 }
 
-install_managed_ui_bundle() {
-  local channel="$1"
-  local ui_root
-  ui_root="$(channel_data_dir "${channel}")/ui-web"
-  local ui_versions_dir="${ui_root}/versions"
-  local ui_current_dir="${ui_root}/current"
-  local release_repo="${HAPPIER_GITHUB_REPO:-happier-dev/happier}"
-  local temp_dir=""
-  temp_dir="$(mktemp -d)"
-  local release_json="${temp_dir}/release.json"
-  local checksums_path="${temp_dir}/checksums-happier-ui-web.txt"
-  local sig_path="${checksums_path}.minisig"
-  local archive_path="${temp_dir}/happier-ui-web.tar.gz"
-  local pubkey_path="${temp_dir}/minisign.pub"
-
-  if ! command -v minisign >/dev/null 2>&1; then
-    msg_error "minisign is required to install the Happier UI bundle."
-    rm -rf "${temp_dir}"
-    exit 1
-  fi
-
-  if ! resolve_happier_release_json_for_tags "${release_repo}" $(ui_release_tags_for_channel "${channel}") >"${release_json}"; then
-    msg_error "Unable to resolve a Happier UI release for channel ${channel}."
-    rm -rf "${temp_dir}"
-    exit 1
-  fi
-
-  local checksums_name=""
-  checksums_name="$(jq -r '.assets[].name' "${release_json}" | grep -E '^checksums-happier-ui-web-v.+\.txt$' | head -n 1 || true)"
-  if [[ -z "${checksums_name}" ]]; then
-    msg_error "Unable to find Happier UI checksum assets."
-    rm -rf "${temp_dir}"
-    exit 1
-  fi
-
-  local version="${checksums_name#checksums-happier-ui-web-v}"
-  version="${version%.txt}"
-  local archive_name="happier-ui-web-v${version}-web-any.tar.gz"
-  local checksums_url=""
-  local sig_url=""
-  local archive_url=""
-  checksums_url="$(jq -r --arg name "${checksums_name}" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}" | head -n 1)"
-  sig_url="$(jq -r --arg name "${checksums_name}.minisig" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}" | head -n 1)"
-  archive_url="$(jq -r --arg name "${archive_name}" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}" | head -n 1)"
-  if [[ -z "${checksums_url}" || -z "${sig_url}" || -z "${archive_url}" ]]; then
-    msg_error "Unable to resolve Happier UI bundle assets for version ${version}."
-    rm -rf "${temp_dir}"
-    exit 1
-  fi
-
-  download_file "${checksums_url}" "${checksums_path}" 3 true || {
-    msg_error "Unable to download Happier UI checksum list."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
-  download_file "${sig_url}" "${sig_path}" 3 true || {
-    msg_error "Unable to download Happier UI minisign signature."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
-  download_file "${archive_url}" "${archive_path}" 3 true || {
-    msg_error "Unable to download Happier UI archive."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
-  printf '%s\n' "${MINISIGN_PUBKEY}" >"${pubkey_path}"
-  minisign -Vm "${checksums_path}" -x "${sig_path}" -p "${pubkey_path}" >/dev/null 2>&1 || {
-    msg_error "Happier UI checksum signature verification failed."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
-  (
-    cd "${temp_dir}" || exit 1
-    grep "  ${archive_name}\$" "${checksums_path}" | sha256sum -c - >/dev/null 2>&1
-  ) || {
-    msg_error "Happier UI archive checksum verification failed."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
-
-  local extract_dir="${temp_dir}/extract"
-  mkdir -p "${extract_dir}"
-  tar -xzf "${archive_path}" -C "${extract_dir}"
-  local artifact_root=""
-  artifact_root="$(resolve_ui_extract_root "${extract_dir}" || true)"
-  if [[ -z "${artifact_root}" || ! -f "${artifact_root}/index.html" ]]; then
-    msg_error "Extracted Happier UI bundle is missing index.html."
-    rm -rf "${temp_dir}"
-    exit 1
-  fi
-
-  # Stage into a temp dir and swap atomically so a failed copy leaves the
-  # previously-installed bundle intact (no dangling/partial current symlink).
-  local version_dir="${ui_versions_dir}/happier-ui-web-${version}"
-  local staging_dir="${version_dir}.tmp.$$"
-  mkdir -p "${ui_versions_dir}"
-  rm -rf "${staging_dir}"
-  mkdir -p "${staging_dir}"
-  cp -a "${artifact_root}/." "${staging_dir}/"
-  rm -rf "${version_dir}"
-  mv "${staging_dir}" "${version_dir}"
-  ln -sfn "${version_dir}" "${ui_current_dir}"
-  rm -rf "${temp_dir}"
-  printf '%s' "${ui_current_dir}"
+urlencode_component() {
+  python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
 }
 
+# Shared post-install "Next steps" output for both install methods (installers +
+# from_source), so the step sequence/wording cannot drift between them.
+#   $1 = auth-login command to display for the in-container daemon auth
+#   $2 = daemon start/restart command shown after login, or "" when the daemon
+#        starts automatically once authenticated (managed service WAIT_FOR_AUTH)
+#   $3 = channel CLI name used for `server add` / `server set`
+print_next_steps() {
+  local auth_login_cmd="$1" daemon_start_cmd="$2" terminal_cli="$3"
+  local hosted_webapp_url=""
+  hosted_webapp_url="$(channel_hosted_webapp_url "${HAPPIER_CHANNEL}")"
+
+  local client_server_url=""
+  if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
+    client_server_url="${PUBLIC_URL}"
+  elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
+    client_server_url="${TAILSCALE_HTTPS_URL}"
+  elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
+    client_server_url="<your-tailscale-https-url>"
+  elif [[ "${SETUP_BIND}" == "loopback" ]]; then
+    client_server_url="http://127.0.0.1:${HAPPIER_SERVER_PORT}"
+  else
+    client_server_url="http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
+  fi
+
+  local client_webapp_url=""
+  if [[ "${SERVE_UI}" == "1" ]]; then
+    if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
+      client_webapp_url="${PUBLIC_URL}"
+    elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
+      client_webapp_url="${TAILSCALE_HTTPS_URL}"
+    elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
+      client_webapp_url=""
+    elif [[ "${SETUP_BIND}" == "loopback" ]]; then
+      client_webapp_url="http://127.0.0.1:${HAPPIER_SERVER_PORT}"
+    else
+      client_webapp_url="http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
+    fi
+  else
+    client_webapp_url="${hosted_webapp_url}"
+  fi
+
+  echo -e "${INFO}${YW} Next steps:${CL}"
+  echo -e "${TAB}${YW}1)${CL} Configure your app to use this server:"
+  echo -e "${TAB}${TAB}${YW}Tip:${CL} easiest is the mobile app — scan the QR shown by 'auth login' (it auto-selects this server)."
+  echo -e "${TAB}${TAB}${YW}Configure links:${CL}"
+  if [[ "${client_server_url}" == "<"*">" ]]; then
+    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}happier://server?url=${client_server_url}${CL}"
+    if [[ -n "${client_webapp_url}" ]]; then
+      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${client_webapp_url}/server?url=${client_server_url}&auto=1${CL}"
+    fi
+  else
+    local client_server_url_enc=""
+    client_server_url_enc="$(urlencode_component "${client_server_url}")"
+    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}happier://server?url=${client_server_url_enc}${CL}"
+    if [[ -n "${hosted_webapp_url}" && "${client_webapp_url}" == "${hosted_webapp_url}" && "${client_server_url}" != https://* ]]; then
+      echo -e "${TAB}${TAB}${TAB}${YW}Web app note:${CL} requires an HTTPS server URL (use Tailscale Serve or reverse proxy)."
+    elif [[ -z "${client_webapp_url}" && "${HAPPIER_CHANNEL}" == "dev" ]]; then
+      echo -e "${TAB}${TAB}${TAB}${YW}Dev lane note:${CL} there is no hosted web UI for the dev channel unless you serve the UI locally."
+    elif [[ -n "${client_webapp_url}" ]]; then
+      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${client_webapp_url}/server?url=${client_server_url_enc}&auto=1${CL}"
+    fi
+  fi
+
+  echo -e "${TAB}${YW}2)${CL} Sign in or create an account (recommended: mobile app)."
+
+  if [[ "${INSTALL_TYPE}" == "devbox" && "${DAEMON_AUTH_DONE}" == "1" ]]; then
+    if [[ "${AUTOSTART}" == "1" ]]; then
+      echo -e "${TAB}${YW}3)${CL} Daemon is authenticated and running."
+    else
+      echo -e "${TAB}${YW}3)${CL} Daemon is authenticated. Autostart is off — start it when you want it running:"
+      if [[ -n "${daemon_start_cmd}" ]]; then
+        echo -e "${TAB}${TAB}${GATEWAY}${BGN}${daemon_start_cmd}${CL}"
+      fi
+    fi
+  elif [[ "${INSTALL_TYPE}" == "devbox" ]]; then
+    echo -e "${TAB}${YW}3)${CL} Authenticate the daemon running in this container:"
+    if [[ "${REMOTE_ACCESS}" == "tailscale" && -z "${TAILSCALE_HTTPS_URL}" ]]; then
+      echo -e "${TAB}${TAB}${YW}Note:${CL} you selected Tailscale but no HTTPS URL was detected yet."
+      echo -e "${TAB}${TAB}${YW}First:${CL} enroll Tailscale and enable Serve (see commands above), then set the canonical URL:"
+      if [[ "${SERVE_UI}" == "1" ]]; then
+        echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${terminal_cli} server set --server-url <your-tailscale-https-url> --local-server-url http://127.0.0.1:${HAPPIER_SERVER_PORT} --webapp-url <your-tailscale-https-url>${CL}"
+      else
+        echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${terminal_cli} server set --server-url <your-tailscale-https-url> --local-server-url http://127.0.0.1:${HAPPIER_SERVER_PORT}${CL}"
+      fi
+    fi
+    echo -e "${TAB}${TAB}${GATEWAY}${BGN}${auth_login_cmd}${CL}"
+    if [[ -n "${daemon_start_cmd}" ]]; then
+      echo -e "${TAB}${TAB}${YW}Then start the daemon:${CL}"
+      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${daemon_start_cmd}${CL}"
+    fi
+  else
+    echo -e "${TAB}${YW}3)${CL} To connect a terminal/daemon from your laptop/desktop:"
+    echo -e "${TAB}${TAB}${YW}a)${CL} Add/select this server in your CLI:"
+    if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
+      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${terminal_cli} server add --server-url ${PUBLIC_URL} --use${CL}"
+    elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
+      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${terminal_cli} server add --server-url ${TAILSCALE_HTTPS_URL} --use${CL}"
+    elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
+      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${terminal_cli} server add --server-url <your-tailscale-https-url> --use${CL}"
+    elif [[ "${SETUP_BIND}" == "loopback" ]]; then
+      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${terminal_cli} server add --server-url http://127.0.0.1:${HAPPIER_SERVER_PORT} --use${CL}"
+    else
+      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${terminal_cli} server add --server-url http://${LOCAL_IP}:${HAPPIER_SERVER_PORT} --use${CL}"
+    fi
+    echo -e "${TAB}${TAB}${YW}b)${CL} Then run:"
+    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${terminal_cli} auth login${CL}"
+  fi
+}
+
+# Write the in-container `update` helper. customize() points it at upstream
+# community-scripts; repoint it at this fork. The generated helper reads
+# INSTALLER_REPO/INSTALLER_REF at update time (default happier-dev/ProxmoxVE@main)
+# and threads them through to ct/happier.sh, so a pinned install updates from the
+# SAME ref instead of silently jumping to main. To pin: `INSTALLER_REF=<tag> update`.
+write_update_helper() {
+  cat >/usr/bin/update <<'UPDATEEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+REPO="${INSTALLER_REPO:-happier-dev/ProxmoxVE}"
+REF="${INSTALLER_REF:-main}"
+curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/ct/happier.sh" \
+  | INSTALLER_REPO="${REPO}" INSTALLER_REF="${REF}" bash
+UPDATEEOF
+  chmod +x /usr/bin/update
+}
+
+# Resolve the channel-matched Happier CLI and store it in HAPPIER_CLI_NAME /
+# HAPPIER_CLI_BIN, exiting on failure. Wraps the shared (non-fatal) resolver.
 resolve_installed_cli_path_or_fail() {
   local cli_name
   cli_name="$(channel_cli_name "${HAPPIER_CHANNEL}")" || {
@@ -458,10 +343,10 @@ resolve_installed_cli_path_or_fail() {
     exit 1
   }
   local candidate=""
-  candidate="$(command -v "${cli_name}" 2>/dev/null || true)"
-  if [[ -z "${candidate}" && -x "/opt/happier/cli/bin/${cli_name}" ]]; then
-    candidate="/opt/happier/cli/bin/${cli_name}"
-  fi
+  candidate="$(resolve_installed_cli_for_channel "${HAPPIER_CHANNEL}")" || {
+    msg_error "Invalid Happier channel: ${HAPPIER_CHANNEL}"
+    exit 1
+  }
   if [[ -z "${candidate}" || ! -x "${candidate}" ]]; then
     msg_error "Unable to resolve the installed ${cli_name} CLI."
     exit 1
@@ -572,6 +457,10 @@ if [[ "${REMOTE_ACCESS}" == "proxy" || "${REMOTE_ACCESS}" == "none" ]]; then
 fi
 
 install_happier_cli_binary() {
+  # Supply chain: the official happier.dev installer is fetched over TLS and piped
+  # to bash (same model as rustup/get.docker.com). The CLI binary it downloads is
+  # verified by that installer; the UI bundle here is minisign + sha256 verified.
+  # The bootstrap script itself is not pinned — accepted risk for the install flow.
   msg_info "Installing Happier CLI — channel: ${HAPPIER_CHANNEL}"
   HAPPIER_CHANNEL="${HAPPIER_CHANNEL}" \
     HAPPIER_PRODUCT="cli" \
@@ -620,7 +509,7 @@ install_managed_relay_runtime() {
   local ui_current_dir=""
   if [[ "${SERVE_UI}" == "1" ]]; then
     msg_info "Installing Happier web UI bundle"
-    ui_current_dir="$(install_managed_ui_bundle "${HAPPIER_CHANNEL}")"
+    ui_current_dir="$(install_managed_ui_bundle "${HAPPIER_CHANNEL}" install)"
     relay_args+=(--env "HAPPIER_SERVER_UI_DIR=${ui_current_dir}")
     if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
       relay_args+=(--env "HAPPIER_WEBAPP_URL=${PUBLIC_URL}")
@@ -716,11 +605,11 @@ configure_devbox_server_profile() {
 }
 
 install_devbox_background_service() {
-  # NOTE: the from_source path sets HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH=1 in the
-  # hstack env file so the daemon waits for auth before going live. The managed
-  # relay runtime here uses a different config contract; until its equivalent
-  # flag is confirmed, we rely on the interactive auth step + --start-if-needed
-  # rather than writing an env the runtime may ignore. Revisit after LXC testing.
+  # No manual wait-for-auth write needed here: the managed CLI's `service install`
+  # already injects HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH=1 (see @happier-dev/stack
+  # scripts/service.mjs), so the daemon waits for auth while the server/UI stay up.
+  # (The from_source path sets it by hand only because its non-service nohup start
+  # does not go through `service install`.)
   msg_info "Installing background service (devbox)"
   HOME="/home/happier" \
     HAPPIER_HOME_DIR="/home/happier/.happier" \
@@ -734,6 +623,9 @@ resolve_daemon_auth_server_url() {
     printf '%s' "${TAILSCALE_HTTPS_URL}"
   elif [[ -n "${PUBLIC_URL}" ]]; then
     printf '%s' "${PUBLIC_URL}"
+  elif [[ "${SETUP_BIND}" == "loopback" ]]; then
+    # Loopback bind only listens on 127.0.0.1 — not reachable from a phone/LAN.
+    printf '%s' "http://127.0.0.1:${HAPPIER_SERVER_PORT}"
   else
     printf '%s' "http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
   fi
@@ -762,6 +654,14 @@ wait_for_local_port() {
 run_daemon_auth_interactive() {
   local auth_url saved_int_trap rc=0 interrupted=0
   auth_url="$(resolve_daemon_auth_server_url)"
+
+  # Mobile QR auth needs a URL the phone can reach. In loopback bind (Tailscale
+  # mode) with no HTTPS URL yet, skip and let the user authenticate later.
+  if [[ "${SETUP_BIND}" == "loopback" && "${auth_url}" != https://* ]]; then
+    DAEMON_AUTH_DONE="0"
+    msg_warn "Skipping interactive daemon auth: no phone-reachable URL yet. Set up Tailscale/HTTPS, then run 'auth login'."
+    return 1
+  fi
 
   # Give the server a moment to bind before showing the QR (best-effort).
   wait_for_local_port "${HAPPIER_SERVER_PORT}" 15 || true
@@ -814,12 +714,11 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   msg_ok "Install complete"
   RELAY_SERVICE_NAME="$(channel_relay_service_name "${HAPPIER_CHANNEL}")"
   CLIENT_CLI_NAME="${HAPPIER_CLI_NAME}"
-  HOSTED_WEBAPP_URL="$(channel_hosted_webapp_url "${HAPPIER_CHANNEL}")"
 
   if [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]]; then
     if run_daemon_auth_interactive "${HAPPIER_CLI_BIN}" auth login --method=mobile --no-open --start-if-needed; then
       if [[ "${AUTOSTART}" == "1" ]]; then
-        systemctl restart "${RELAY_SERVICE_NAME}" >/dev/null 2>&1 || true
+        restart_happier_unit "${RELAY_SERVICE_NAME}"
       fi
     fi
   fi
@@ -851,109 +750,22 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
     echo -e "${TAB}${GATEWAY}${BGN}systemctl start ${RELAY_SERVICE_NAME}${CL}"
   fi
 
-  echo -e "${INFO}${YW} Next steps:${CL}"
-
-  urlencode_component() {
-    python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
-  }
-
-  CLIENT_SERVER_URL=""
-  if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-    CLIENT_SERVER_URL="${PUBLIC_URL}"
-  elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-    CLIENT_SERVER_URL="${TAILSCALE_HTTPS_URL}"
-  elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
-    CLIENT_SERVER_URL="<your-tailscale-https-url>"
-  elif [[ "${SETUP_BIND}" == "loopback" ]]; then
-    CLIENT_SERVER_URL="http://127.0.0.1:${HAPPIER_SERVER_PORT}"
-  else
-    CLIENT_SERVER_URL="http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
+  DAEMON_START_CMD=""
+  if [[ "${INSTALL_TYPE}" == "devbox" && "${AUTOSTART}" != "1" ]]; then
+    # With autostart on, the managed service starts the daemon automatically once
+    # authenticated (HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH); only show a manual start otherwise.
+    DAEMON_START_CMD="sudo -u happier -H ${CLIENT_CLI_NAME} daemon start"
   fi
-
-  CLIENT_WEBAPP_URL=""
-  if [[ "${SERVE_UI}" == "1" ]]; then
-    if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-      CLIENT_WEBAPP_URL="${PUBLIC_URL}"
-    elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-      CLIENT_WEBAPP_URL="${TAILSCALE_HTTPS_URL}"
-    elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
-      CLIENT_WEBAPP_URL=""
-    elif [[ "${SETUP_BIND}" == "loopback" ]]; then
-      CLIENT_WEBAPP_URL="http://127.0.0.1:${HAPPIER_SERVER_PORT}"
-    else
-      CLIENT_WEBAPP_URL="http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
-    fi
-  else
-    CLIENT_WEBAPP_URL="${HOSTED_WEBAPP_URL}"
-  fi
-
-  echo -e "${TAB}${YW}1)${CL} Configure your app to use this server:"
-  echo -e "${TAB}${TAB}${YW}Configure links:${CL}"
-  if [[ "${CLIENT_SERVER_URL}" == "<"*">" ]]; then
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}happier://server?url=${CLIENT_SERVER_URL}${CL}"
-    if [[ -n "${CLIENT_WEBAPP_URL}" ]]; then
-      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_WEBAPP_URL}/server?url=${CLIENT_SERVER_URL}&auto=1${CL}"
-    fi
-  else
-    CLIENT_SERVER_URL_ENC="$(urlencode_component "${CLIENT_SERVER_URL}")"
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}happier://server?url=${CLIENT_SERVER_URL_ENC}${CL}"
-    if [[ -n "${HOSTED_WEBAPP_URL}" && "${CLIENT_WEBAPP_URL}" == "${HOSTED_WEBAPP_URL}" && "${CLIENT_SERVER_URL}" != https://* ]]; then
-      echo -e "${TAB}${TAB}${TAB}${YW}Web app note:${CL} requires an HTTPS server URL (use Tailscale Serve or reverse proxy)."
-    elif [[ -z "${CLIENT_WEBAPP_URL}" && "${HAPPIER_CHANNEL}" == "dev" ]]; then
-      echo -e "${TAB}${TAB}${TAB}${YW}Dev lane note:${CL} there is no hosted web UI for the dev channel unless you serve the UI locally."
-    elif [[ -n "${CLIENT_WEBAPP_URL}" ]]; then
-      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_WEBAPP_URL}/server?url=${CLIENT_SERVER_URL_ENC}&auto=1${CL}"
-    fi
-  fi
-
-  echo -e "${TAB}${YW}2)${CL} Sign in or create an account (recommended: mobile app)."
-
-  if [[ "${INSTALL_TYPE}" == "devbox" && "${DAEMON_AUTH_DONE}" == "1" ]]; then
-    echo -e "${TAB}${YW}3)${CL} Daemon is authenticated and running."
-  elif [[ "${INSTALL_TYPE}" == "devbox" ]]; then
-    echo -e "${TAB}${YW}3)${CL} Authenticate the daemon running in this container:"
-    if [[ "${REMOTE_ACCESS}" == "tailscale" && -z "${TAILSCALE_HTTPS_URL}" ]]; then
-      echo -e "${TAB}${TAB}${YW}Note:${CL} you selected Tailscale but no HTTPS URL was detected yet."
-      echo -e "${TAB}${TAB}${YW}First:${CL} enroll Tailscale and enable Serve (see commands above), then set the canonical URL:"
-      if [[ "${SERVE_UI}" == "1" ]]; then
-        echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${CLIENT_CLI_NAME} server set --server-url <your-tailscale-https-url> --local-server-url http://127.0.0.1:${HAPPIER_SERVER_PORT} --webapp-url <your-tailscale-https-url>${CL}"
-      else
-        echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${CLIENT_CLI_NAME} server set --server-url <your-tailscale-https-url> --local-server-url http://127.0.0.1:${HAPPIER_SERVER_PORT}${CL}"
-      fi
-    fi
-    echo -e "${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${CLIENT_CLI_NAME} auth login${CL}"
-    if [[ "${AUTOSTART}" != "1" ]]; then
-      echo -e "${TAB}${TAB}${YW}If you disabled autostart:${CL} start the daemon manually:"
-      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${CLIENT_CLI_NAME} daemon start${CL}"
-    fi
-  else
-    echo -e "${TAB}${YW}3)${CL} To connect a terminal/daemon from your laptop/desktop:"
-    echo -e "${TAB}${TAB}${YW}a)${CL} Add/select this server in your CLI:"
-    if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url ${PUBLIC_URL} --use${CL}"
-    elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url ${TAILSCALE_HTTPS_URL} --use${CL}"
-    elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
-      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url <your-tailscale-https-url> --use${CL}"
-    elif [[ "${SETUP_BIND}" == "loopback" ]]; then
-      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url http://127.0.0.1:${HAPPIER_SERVER_PORT} --use${CL}"
-    else
-      echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url http://${LOCAL_IP}:${HAPPIER_SERVER_PORT} --use${CL}"
-    fi
-    echo -e "${TAB}${TAB}${YW}b)${CL} Then run:"
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} auth login${CL}"
-  fi
+  print_next_steps \
+    "sudo -u happier -H ${CLIENT_CLI_NAME} auth login" \
+    "${DAEMON_START_CMD}" \
+    "${CLIENT_CLI_NAME}"
 
   motd_ssh
   customize
 
-  # customize() creates /usr/bin/update pointing to community-scripts; fix to use the fork.
-  cat >/usr/bin/update <<'UPDATEEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-curl -fsSL https://raw.githubusercontent.com/happier-dev/ProxmoxVE/main/ct/happier.sh | bash
-UPDATEEOF
-  chmod +x /usr/bin/update
+  # customize() points /usr/bin/update at community-scripts; repoint it at the fork.
+  write_update_helper
 
   cleanup_lxc
   exit 0
@@ -1245,7 +1057,7 @@ if [[ "${AUTOSTART}" == "1" ]]; then
       sed -i '/^\[Service\]/a User=happier' "$SYSTEMD_UNIT_PATH"
     fi
     systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl restart "${STACK_LABEL}.service" >/dev/null 2>&1 || true
+    restart_happier_unit "${STACK_LABEL}.service"
   fi
   msg_ok "Autostart enabled"
 fi
@@ -1286,7 +1098,7 @@ if [[ "${REMOTE_ACCESS}" == "tailscale" && "${TAILSCALE_ENABLE_SERVE}" == "1" ]]
     # The service was started earlier without the Tailscale URL; restart so
     # it picks up the correct HAPPIER_STACK_SERVER_URL for deep links/QR codes.
     if [[ "${AUTOSTART}" == "1" ]]; then
-      systemctl restart "${STACK_LABEL}.service" >/dev/null 2>&1 || true
+      restart_happier_unit "${STACK_LABEL}.service"
     fi
   fi
   if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
@@ -1309,7 +1121,7 @@ msg_ok "Install complete"
 if [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]]; then
   if run_daemon_auth_interactive "${HSTACK_BIN}" auth login --method=mobile --no-open --start-if-needed; then
     if [[ "${AUTOSTART}" == "1" ]]; then
-      systemctl restart "${STACK_LABEL}.service" >/dev/null 2>&1 || true
+      restart_happier_unit "${STACK_LABEL}.service"
     fi
   fi
 fi
@@ -1359,106 +1171,24 @@ elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
     echo -e "${TAB}${GATEWAY}${BGN}tailscale serve status${CL}"
   fi
 fi
-echo -e "${INFO}${YW} Next steps:${CL}"
-echo -e "${TAB}${YW}1)${CL} Connect with the mobile app (recommended): scan the QR code shown by 'auth login'."
-echo -e "${TAB}${TAB}${YW}Tip:${CL} scanning the QR automatically selects the correct server in the app."
-echo -e "${TAB}${TAB}${YW}Fallback:${CL} you can also configure the server manually using the links below."
-
-urlencode_component() {
-  python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
-}
-
-CLIENT_SERVER_URL=""
-if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-  CLIENT_SERVER_URL="${PUBLIC_URL}"
-elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-  CLIENT_SERVER_URL="${TAILSCALE_HTTPS_URL}"
-elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
-  CLIENT_SERVER_URL="<your-tailscale-https-url>"
-elif [[ "${SETUP_BIND}" == "loopback" ]]; then
-  CLIENT_SERVER_URL="http://127.0.0.1:${HAPPIER_SERVER_PORT}"
-else
-  CLIENT_SERVER_URL="http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
-fi
-
-CLIENT_WEBAPP_URL=""
-if [[ "${SERVE_UI}" == "1" ]]; then
-  if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-    CLIENT_WEBAPP_URL="${PUBLIC_URL}"
-  elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-    CLIENT_WEBAPP_URL="${TAILSCALE_HTTPS_URL}"
-  elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
-    CLIENT_WEBAPP_URL=""
-  elif [[ "${SETUP_BIND}" == "loopback" ]]; then
-    CLIENT_WEBAPP_URL="http://127.0.0.1:${HAPPIER_SERVER_PORT}"
-  else
-    CLIENT_WEBAPP_URL="http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
-  fi
-else
-  CLIENT_WEBAPP_URL="$(channel_hosted_webapp_url "${HAPPIER_CHANNEL}")"
-fi
-
-echo -e "${TAB}${TAB}${YW}Configure links:${CL}"
-if [[ "${CLIENT_SERVER_URL}" == "<"*">" ]]; then
-  echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}happier://server?url=${CLIENT_SERVER_URL}${CL}"
-  if [[ -n "${CLIENT_WEBAPP_URL}" ]]; then
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_WEBAPP_URL}/server?url=${CLIENT_SERVER_URL}&auto=1${CL}"
-  fi
-else
-  CLIENT_SERVER_URL_ENC="$(urlencode_component "${CLIENT_SERVER_URL}")"
-  echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}happier://server?url=${CLIENT_SERVER_URL_ENC}${CL}"
-  if [[ -n "${CLIENT_WEBAPP_URL}" && "${CLIENT_WEBAPP_URL}" == "$(channel_hosted_webapp_url "${HAPPIER_CHANNEL}")" && "${CLIENT_SERVER_URL}" != https://* ]]; then
-    echo -e "${TAB}${TAB}${TAB}${YW}Web app note:${CL} requires an HTTPS server URL (use Tailscale Serve or reverse proxy)."
-  elif [[ -z "${CLIENT_WEBAPP_URL}" && "${HAPPIER_CHANNEL}" == "dev" ]]; then
-    echo -e "${TAB}${TAB}${TAB}${YW}Dev lane note:${CL} there is no hosted web UI for the dev channel unless you serve the UI locally."
-  elif [[ -n "${CLIENT_WEBAPP_URL}" ]]; then
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_WEBAPP_URL}/server?url=${CLIENT_SERVER_URL_ENC}&auto=1${CL}"
-  fi
-fi
-
-if [[ "${REMOTE_ACCESS}" == "tailscale" && -z "${TAILSCALE_HTTPS_URL}" ]]; then
-  echo -e "${TAB}${TAB}${YW}After you have your Tailscale HTTPS URL:${CL} re-run these to get the correct links/QR codes:"
-  echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}su - happier -c \"${HSTACK_BIN} tailscale url\"${CL}"
-  echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}su - happier -c \"${HSTACK_BIN} auth login --method=mobile --no-open\"${CL}"
-fi
-
-if [[ "${INSTALL_TYPE}" == "devbox" && "${DAEMON_AUTH_DONE}" == "1" ]]; then
-  echo -e "${TAB}${YW}2)${CL} Daemon is authenticated and running."
-elif [[ "${INSTALL_TYPE}" == "devbox" ]]; then
-  echo -e "${TAB}${YW}2)${CL} Connect the daemon running in this devbox (run inside the container):"
-  echo -e "${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${HSTACK_BIN} auth login --method=mobile --no-open${CL}"
-  echo -e "${TAB}${YW}3)${CL} After login, restart the stack to start the daemon:"
+CLIENT_CLI_NAME="$(channel_cli_name "${HAPPIER_CHANNEL}")"
+DAEMON_START_CMD=""
+if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
   if [[ "${AUTOSTART}" == "1" ]]; then
-    echo -e "${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${HSTACK_BIN} service restart --mode=system${CL}"
+    DAEMON_START_CMD="sudo -u happier -H ${HSTACK_BIN} service restart --mode=system"
   else
-    echo -e "${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${HSTACK_BIN} start --restart${CL}"
+    DAEMON_START_CMD="sudo -u happier -H ${HSTACK_BIN} start --restart"
   fi
-else
-  echo -e "${TAB}${YW}2)${CL} To connect a terminal/daemon from your laptop/desktop:"
-  echo -e "${TAB}${TAB}${YW}a)${CL} Add/select this server in your CLI:"
-  CLIENT_CLI_NAME="$(channel_cli_name "${HAPPIER_CHANNEL}")"
-  if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url ${PUBLIC_URL} --use${CL}"
-  elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url ${TAILSCALE_HTTPS_URL} --use${CL}"
-  elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url <your-tailscale-https-url> --use${CL}"
-  else
-    echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} server add --server-url http://${LOCAL_IP}:${HAPPIER_SERVER_PORT} --use${CL}"
-  fi
-  echo -e "${TAB}${TAB}${YW}b)${CL} Then run:"
-  echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}${CLIENT_CLI_NAME} auth login${CL}"
 fi
+print_next_steps \
+  "sudo -u happier -H ${HSTACK_BIN} auth login --method=mobile --no-open" \
+  "${DAEMON_START_CMD}" \
+  "${CLIENT_CLI_NAME}"
 
 motd_ssh
 customize
 
-# customize() creates /usr/bin/update pointing to community-scripts; fix to use the fork.
-cat >/usr/bin/update <<'UPDATEEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-curl -fsSL https://raw.githubusercontent.com/happier-dev/ProxmoxVE/main/ct/happier.sh | bash
-UPDATEEOF
-chmod +x /usr/bin/update
+# customize() points /usr/bin/update at community-scripts; repoint it at the fork.
+write_update_helper
 
 cleanup_lxc
