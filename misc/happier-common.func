@@ -7,16 +7,14 @@
 # Shared Happier helpers used by BOTH ct/happier.sh (host-side) and
 # install/happier-install.sh (in-container). It is fetched over the network
 # like build.func and sourced AFTER the framework msg_* helpers are available.
-# It must be sourceable standalone — it depends only on INSTALLER_REPO/REF
-# (defaulted below) and the standard framework msg_* helpers.
-
-INSTALLER_REPO="${INSTALLER_REPO:-community-scripts/ProxmoxVE}"
-INSTALLER_REF="${INSTALLER_REF:-main}"
+# It must be sourceable standalone — it depends only on the standard framework
+# msg_* helpers (callers own INSTALLER_REPO/INSTALLER_REF; nothing here reads them).
 
 # Pinned minisign trust anchor for the Happier UI bundle. Override with
 # HAPPIER_MINISIGN_PUBKEY only if you know what you are doing — doing so
 # replaces the signature trust anchor and emits a warning.
-DEFAULT_MINISIGN_PUBKEY="$(cat <<'EOF'
+DEFAULT_MINISIGN_PUBKEY="$(
+  cat <<'EOF'
 untrusted comment: minisign public key 91AE28177BF6E43C
 RWQ85PZ7FyiukYbL3qv/bKnwgbT68wLVzotapeMFIb8n+c7pBQ7U8W2t
 EOF
@@ -30,13 +28,13 @@ normalize_happier_channel() {
   local raw
   raw="$(printf '%s' "$1" | tr -d '\r' | xargs | tr '[:upper:]' '[:lower:]')"
   case "${raw}" in
-    ""|stable)
+    "" | stable)
       printf '%s' "stable"
       ;;
     preview)
       printf '%s' "preview"
       ;;
-    dev|publicdev)
+    dev | publicdev)
       printf '%s' "dev"
       ;;
     *)
@@ -93,7 +91,7 @@ channel_ui_current_dir() {
 
 channel_hosted_webapp_url() {
   case "$1" in
-    stable|preview) printf '%s' "https://app.happier.dev" ;;
+    stable | preview) printf '%s' "https://app.happier.dev" ;;
     dev) printf '%s' "" ;;
     *) return 1 ;;
   esac
@@ -102,6 +100,66 @@ channel_hosted_webapp_url() {
 # Restart a Happier systemd unit, best-effort (failures are non-fatal).
 restart_happier_unit() {
   systemctl restart "$1" >/dev/null 2>&1 || true
+}
+
+# Discover the installed happier daemon systemd unit (channel-suffixed name).
+# Tries list-unit-files first (finds installed-but-never-loaded units, e.g. right
+# after `service install` with autostart off), then loaded units. --plain keeps
+# the "●" failure marker out of field 1. Prints the unit name, or nothing.
+find_happier_daemon_unit() {
+  local unit=""
+  unit="$(systemctl list-unit-files --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
+  if [[ -z "${unit}" ]]; then
+    unit="$(systemctl list-units --all --plain --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
+  fi
+  printf '%s' "${unit}"
+}
+
+# Resolve the npm package spec for a channel: honors an explicit spec ($2) and
+# owns the channel defaults + the preview->next dist-tag back-compat alias.
+channel_default_stack_package() {
+  local channel="$1"
+  local pkg="${2:-}"
+  if [[ -z "${pkg}" ]]; then
+    case "${channel}" in
+      preview) pkg="@happier-dev/stack@next" ;;
+      *) pkg="@happier-dev/stack@latest" ;;
+    esac
+  fi
+  # Back-compat: the old "preview" dist-tag was renamed "next" on npm.
+  if [[ "${pkg}" == "@happier-dev/stack@preview" ]]; then
+    pkg="@happier-dev/stack@next"
+  fi
+  printf '%s' "${pkg}"
+}
+
+# Resolve the hstack layout via `hstack where --json` (run as the happier user).
+# Sets HSTACK_WHERE_HOME/_NAME/_LABEL/_ENV/_WORKSPACE ("" when undetected) —
+# callers apply their own defaults for empty fields. Requires jq; without it (or
+# on any hstack failure) every field stays empty and the callers' defaults win.
+resolve_hstack_layout() {
+  local hstack_bin="$1"
+  local where_json=""
+  HSTACK_WHERE_HOME=""
+  HSTACK_WHERE_NAME=""
+  HSTACK_WHERE_LABEL=""
+  HSTACK_WHERE_ENV=""
+  HSTACK_WHERE_WORKSPACE=""
+  where_json="$(sudo -u happier -H "${hstack_bin}" where --json 2>/dev/null || true)"
+  if [[ -z "${where_json}" ]] || ! command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+  # shellcheck disable=SC2034 # consumed by the sourcing scripts, not this file
+  HSTACK_WHERE_HOME="$(printf '%s' "${where_json}" | jq -r '.homeDir // empty' 2>/dev/null || true)"
+  # shellcheck disable=SC2034
+  HSTACK_WHERE_NAME="$(printf '%s' "${where_json}" | jq -r '.stack.name // empty' 2>/dev/null || true)"
+  # shellcheck disable=SC2034
+  HSTACK_WHERE_LABEL="$(printf '%s' "${where_json}" | jq -r '.stack.label // empty' 2>/dev/null || true)"
+  # shellcheck disable=SC2034
+  HSTACK_WHERE_ENV="$(printf '%s' "${where_json}" | jq -r '.envFiles.main.path // empty' 2>/dev/null || true)"
+  # shellcheck disable=SC2034
+  HSTACK_WHERE_WORKSPACE="$(printf '%s' "${where_json}" | jq -r '.workspaceDir // .workspace.dir // .workspace.path // empty' 2>/dev/null || true)"
+  return 0
 }
 
 ui_release_tags_for_channel() {
@@ -130,12 +188,16 @@ happier_github_curl() {
     } >"${config_path}"
   fi
 
+  # Retry transient failures and bound every transfer: without --max-time a stalled
+  # connection hangs the install/update indefinitely (curl has no default timeout).
+  local -a curl_net_opts=(--retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120)
+
   if [[ "${mode}" == "stdout" ]]; then
     if [[ -n "${config_path}" ]]; then
-      curl -fsSL --config "${config_path}" "${url}"
+      curl -fsSL "${curl_net_opts[@]}" --config "${config_path}" "${url}"
       status=$?
     else
-      curl -fsSL \
+      curl -fsSL "${curl_net_opts[@]}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "${url}"
@@ -148,10 +210,10 @@ happier_github_curl() {
       return 1
     fi
     if [[ -n "${config_path}" ]]; then
-      curl -fsSL --config "${config_path}" "${url}" -o "${destination}"
+      curl -fsSL "${curl_net_opts[@]}" --config "${config_path}" "${url}" -o "${destination}"
       status=$?
     else
-      curl -fsSL "${url}" -o "${destination}"
+      curl -fsSL "${curl_net_opts[@]}" "${url}" -o "${destination}"
       status=$?
     fi
   fi
@@ -205,10 +267,28 @@ resolve_installed_cli_for_channel() {
   printf '%s' "${candidate}"
 }
 
+# Abort or degrade a failed install_managed_ui_bundle run: always cleans the temp
+# dir; the install verb hard-fails (msg_error + exit 1), the refresh verb degrades
+# to msg_warn + return 1 so callers keep the previously-installed bundle instead of
+# aborting a whole update over a transient fetch problem.
+_happier_ui_bundle_fail() {
+  local verb="$1"
+  local temp_dir="$2"
+  local message="$3"
+  rm -rf "${temp_dir}"
+  if [[ "${verb}" == "refresh" ]]; then
+    msg_warn "${message} Keeping the previously-installed UI bundle."
+    return 1
+  fi
+  msg_error "${message}"
+  exit 1
+}
+
 # Download, verify (minisign + sha256), and atomically install the managed
 # Happier UI bundle for the given channel. Verification is identical for both
-# install and refresh; $2 is a verb label ("install" | "refresh") used only for
-# msg_info/msg_error wording. Prints the resolved ui-web/current dir on success.
+# install and refresh; $2 selects the failure mode (see _happier_ui_bundle_fail):
+# "install" aborts, "refresh" returns 1 and keeps the existing bundle.
+# Prints the resolved ui-web/current dir on success.
 install_managed_ui_bundle() {
   local channel="$1"
   local verb="${2:-install}"
@@ -227,27 +307,22 @@ install_managed_ui_bundle() {
   local pubkey_path="${temp_dir}/minisign.pub"
 
   if ! command -v minisign >/dev/null 2>&1; then
-    msg_error "minisign is required to ${verb} the Happier UI bundle."
-    rm -rf "${temp_dir}"
-    exit 1
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "minisign is required to ${verb} the Happier UI bundle." || return 1
   fi
 
   local _ui_tags
   _ui_tags="$(ui_release_tags_for_channel "${channel}")"
   # _ui_tags is intentionally unquoted: the tags are passed as separate positional args
-  # (word-splitting is desired here; SC2086 is disabled repo-wide).
+  # (word-splitting is desired here).
+  # shellcheck disable=SC2086
   if ! resolve_happier_release_json_for_tags "${release_repo}" ${_ui_tags} >"${release_json}"; then
-    msg_error "Unable to resolve a Happier UI release for channel ${channel}."
-    rm -rf "${temp_dir}"
-    exit 1
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Unable to resolve a Happier UI release for channel ${channel}." || return 1
   fi
 
   local checksums_name=""
   checksums_name="$(jq -r '.assets[].name' "${release_json}" | grep -E '^checksums-happier-ui-web-v.+\.txt$' | head -n 1 || true)"
   if [[ -z "${checksums_name}" ]]; then
-    msg_error "Unable to find Happier UI checksum assets."
-    rm -rf "${temp_dir}"
-    exit 1
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Unable to find Happier UI checksum assets." || return 1
   fi
 
   local version="${checksums_name#checksums-happier-ui-web-v}"
@@ -264,63 +339,67 @@ install_managed_ui_bundle() {
   sig_url="$(jq -r --arg name "${checksums_name}.minisig" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}" | head -n 1)"
   archive_url="$(jq -r --arg name "${archive_name}" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}" | head -n 1)"
   if [[ -z "${checksums_url}" || -z "${sig_url}" || -z "${archive_url}" ]]; then
-    msg_error "Unable to resolve Happier UI bundle assets for version ${version}."
-    rm -rf "${temp_dir}"
-    exit 1
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Unable to resolve Happier UI bundle assets for version ${version}." || return 1
   fi
 
-  download_file "${checksums_url}" "${checksums_path}" 3 true || {
-    msg_error "Unable to download Happier UI checksum list."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
-  download_file "${sig_url}" "${sig_path}" 3 true || {
-    msg_error "Unable to download Happier UI minisign signature."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
-  download_file "${archive_url}" "${archive_path}" 3 true || {
-    msg_error "Unable to download Happier UI archive."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
+  download_file "${checksums_url}" "${checksums_path}" 3 true ||
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Unable to download Happier UI checksum list." || return 1
+  download_file "${sig_url}" "${sig_path}" 3 true ||
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Unable to download Happier UI minisign signature." || return 1
+  download_file "${archive_url}" "${archive_path}" 3 true ||
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Unable to download Happier UI archive." || return 1
   printf '%s\n' "${MINISIGN_PUBKEY}" >"${pubkey_path}"
-  minisign -Vm "${checksums_path}" -x "${sig_path}" -p "${pubkey_path}" >/dev/null 2>&1 || {
-    msg_error "Happier UI checksum signature verification failed."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
+  minisign -Vm "${checksums_path}" -x "${sig_path}" -p "${pubkey_path}" >/dev/null 2>&1 ||
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Happier UI checksum signature verification failed." || return 1
   (
     cd "${temp_dir}" || exit 1
     grep "  ${archive_name}\$" "${checksums_path}" | sha256sum -c - >/dev/null 2>&1
-  ) || {
-    msg_error "Happier UI archive checksum verification failed."
-    rm -rf "${temp_dir}"
-    exit 1
-  }
+  ) ||
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Happier UI archive checksum verification failed." || return 1
 
   local extract_dir="${temp_dir}/extract"
   mkdir -p "${extract_dir}"
-  tar -xzf "${archive_path}" -C "${extract_dir}"
+  # Guarded so a corrupt archive / full disk cleans the temp dir instead of
+  # leaking it via the ERR trap.
+  tar -xzf "${archive_path}" -C "${extract_dir}" ||
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Failed to extract the Happier UI bundle archive." || return 1
   local artifact_root=""
   artifact_root="$(resolve_ui_extract_root "${extract_dir}" || true)"
   if [[ -z "${artifact_root}" || ! -f "${artifact_root}/index.html" ]]; then
-    msg_error "Extracted Happier UI bundle is missing index.html."
-    rm -rf "${temp_dir}"
-    exit 1
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Extracted Happier UI bundle is missing index.html." || return 1
   fi
 
-  # Stage into a temp dir and swap atomically so a failed copy leaves the
-  # previously-installed bundle intact (no dangling/partial current symlink).
+  # Stage into a temp dir and swap so a failed copy leaves the previously-installed
+  # bundle intact. The old version is moved aside rather than deleted first: on a
+  # same-version refresh version_dir IS the live `current` target, and rm-then-mv
+  # would leave a dangling symlink if interrupted between the two.
   local version_dir="${ui_versions_dir}/happier-ui-web-${version}"
   local staging_dir="${version_dir}.tmp.$$"
   mkdir -p "${ui_versions_dir}"
   rm -rf "${staging_dir}"
   mkdir -p "${staging_dir}"
-  cp -a "${artifact_root}/." "${staging_dir}/"
-  rm -rf "${version_dir}"
-  mv "${staging_dir}" "${version_dir}"
+  cp -a "${artifact_root}/." "${staging_dir}/" || {
+    rm -rf "${staging_dir}"
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Failed to stage the Happier UI bundle (disk full?)." || return 1
+  }
+  local old_dir=""
+  if [[ -e "${version_dir}" ]]; then
+    old_dir="${version_dir}.old.$$"
+    rm -rf "${old_dir}"
+    mv "${version_dir}" "${old_dir}"
+  fi
+  if ! mv "${staging_dir}" "${version_dir}"; then
+    # Best-effort restore of the previous version before bailing.
+    if [[ -n "${old_dir}" ]]; then
+      mv "${old_dir}" "${version_dir}" 2>/dev/null || true
+    fi
+    rm -rf "${staging_dir}"
+    _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Failed to move the staged Happier UI bundle into place." || return 1
+  fi
   ln -sfn "${version_dir}" "${ui_current_dir}"
+  if [[ -n "${old_dir}" ]]; then
+    rm -rf "${old_dir}"
+  fi
   rm -rf "${temp_dir}"
   printf '%s' "${ui_current_dir}"
 }

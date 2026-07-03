@@ -5,7 +5,8 @@
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # Source: https://happier.dev
 
-source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
+# shellcheck disable=SC1091 # sourced from a runtime-provided string, not a file
+source /dev/stdin <<<"${FUNCTIONS_FILE_PATH}"
 
 # Shared Happier helpers (channel/UI-bundle/CLI resolvers + pinned minisign key).
 # Fetched and sourced AFTER FUNCTIONS_FILE_PATH so the framework msg_* helpers
@@ -20,11 +21,17 @@ if [[ -z "${HAPPIER_COMMON_FUNC//[[:space:]]/}" ]]; then
   msg_error "Downloaded happier-common.func is empty: ${HAPPIER_COMMON_FUNC_URL}"
   exit 1
 fi
+# NB: this fetch/empty-check/source block must track ct/happier.sh's
+# fetch_remote_script pattern; it stays inline here (bootstrap chicken-and-egg:
+# the shared helper lives in the file being fetched).
+# shellcheck disable=SC1091 # sourced from a runtime-fetched string, not a file
 source /dev/stdin <<<"${HAPPIER_COMMON_FUNC}"
 
 # Used by community-scripts helpers (e.g. motd_ssh in misc/install.func).
+# shellcheck disable=SC2034 # consumed by the sourced framework, not this script
 APP="Happier"
 app="${app:-happier}"
+# shellcheck disable=SC2034 # consumed by the sourced framework, not this script
 APPLICATION="Happier"
 SSH_ROOT="${SSH_ROOT:-no}"
 PASSWORD="${PASSWORD:-}"
@@ -57,23 +64,24 @@ msg_ok "apt ready"
 
 update_os
 
-INSTALL_TYPE="${HAPPIER_PVE_INSTALL_TYPE:-devbox}"      # devbox | server_only
-SERVE_UI="${HAPPIER_PVE_SERVE_UI:-1}"                  # 1 | 0
-AUTOSTART="${HAPPIER_PVE_AUTOSTART:-1}"                # 1 | 0
-REMOTE_ACCESS="${HAPPIER_PVE_REMOTE_ACCESS:-none}"     # none | proxy | tailscale
+INSTALL_TYPE="${HAPPIER_PVE_INSTALL_TYPE:-devbox}"             # devbox | server_only
+SERVE_UI="${HAPPIER_PVE_SERVE_UI:-1}"                          # 1 | 0
+AUTOSTART="${HAPPIER_PVE_AUTOSTART:-1}"                        # 1 | 0
+REMOTE_ACCESS="${HAPPIER_PVE_REMOTE_ACCESS:-none}"             # none | proxy | tailscale
 INSTALL_METHOD_RAW="${HAPPIER_PVE_INSTALL_METHOD:-installers}" # installers | from_source (aliases: auto|selfhost|legacy)
-TAILSCALE_AUTHKEY="${HAPPIER_PVE_TAILSCALE_AUTHKEY:-}" # optional
-PUBLIC_URL_RAW="${HAPPIER_PVE_PUBLIC_URL:-}"           # required when REMOTE_ACCESS=proxy
-DAEMON_AUTH="${HAPPIER_PVE_DAEMON_AUTH:-0}"            # 1 | 0 (interactive QR auth during install)
+TAILSCALE_AUTHKEY="${HAPPIER_PVE_TAILSCALE_AUTHKEY:-}"         # optional
+PUBLIC_URL_RAW="${HAPPIER_PVE_PUBLIC_URL:-}"                   # required when REMOTE_ACCESS=proxy
+DAEMON_AUTH="${HAPPIER_PVE_DAEMON_AUTH:-0}"                    # 1 | 0 (interactive QR auth during install)
 DAEMON_AUTH_DONE="0"
 HAPPIER_CHANNEL_RAW="${HAPPIER_PVE_CHANNEL:-${HAPPIER_PVE_HSTACK_CHANNEL:-stable}}" # stable | preview | dev
-STACK_PACKAGE_RAW="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}"    # e.g. @happier-dev/stack@latest
-SERVER_PORT_RAW="${HAPPIER_PVE_SERVER_PORT:-}"                                       # optional explicit PORT override
-INSTALL_AGENTS="${HAPPIER_PVE_INSTALL_AGENTS:-1}"      # 1 | 0 (install claude+codex on devbox)
-DAEMON_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"        # optional daemon GITHUB_PERSONAL_ACCESS_TOKEN
-AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"            # 1 | 0 (enable managed auto-update timer)
-AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"  # HH:MM for the auto-update timer
-if [[ "${AUTO_UPDATE}" == "1" && ! "${AUTO_UPDATE_AT}" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+STACK_PACKAGE_RAW="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}"   # e.g. @happier-dev/stack@latest
+SERVER_PORT_RAW="${HAPPIER_PVE_SERVER_PORT:-}"                                      # optional explicit PORT override
+INSTALL_AGENTS="${HAPPIER_PVE_INSTALL_AGENTS:-1}"                                   # 1 | 0 (install claude+codex on devbox)
+DAEMON_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"                                     # optional daemon GITHUB_PERSONAL_ACCESS_TOKEN
+AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"                                         # 1 | 0 (enable managed auto-update timer)
+AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"                               # HH:MM for the auto-update timer
+is_valid_hhmm() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
+if [[ "${AUTO_UPDATE}" == "1" ]] && ! is_valid_hhmm "${AUTO_UPDATE_AT}"; then
   msg_warn "Invalid HAPPIER_PVE_AUTO_UPDATE_AT='${AUTO_UPDATE_AT}', falling back to 04:00"
   AUTO_UPDATE_AT="04:00"
 fi
@@ -158,12 +166,29 @@ detect_tailscale_https_url() {
   return 1
 }
 
+# Generic bounded poll: retry_until <attempts> <sleep_s> <cmd...> — runs cmd
+# until it succeeds (rc 0) or attempts are exhausted (rc 1).
+retry_until() {
+  local attempts="$1" sleep_s="$2"
+  shift 2
+  local i=1
+  while ((i <= attempts)); do
+    if "$@"; then
+      return 0
+    fi
+    sleep "${sleep_s}"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Value-producing (prints the URL), so it keeps its own loop rather than retry_until.
 resolve_tailscale_https_url_with_retries() {
   local attempts="${1:-10}"
   local sleep_s="${2:-2}"
   local i=1
   local detected=""
-  while (( i <= attempts )); do
+  while ((i <= attempts)); do
     detected="$(detect_tailscale_https_url || true)"
     if [[ "${detected}" == https://* ]]; then
       printf '%s' "${detected}"
@@ -173,6 +198,127 @@ resolve_tailscale_https_url_with_retries() {
     i=$((i + 1))
   done
   return 1
+}
+
+_tailscale_online_probe() {
+  "${TAILSCALE_BIN:-tailscale}" ip -4 >/dev/null 2>&1 || "${TAILSCALE_BIN:-tailscale}" ip -6 >/dev/null 2>&1
+}
+tailscale_wait_until_online() { retry_until "${1:-20}" "${2:-2}" _tailscale_online_probe; }
+
+_systemd_unit_active_probe() { systemctl is-active --quiet "$1" >/dev/null 2>&1; }
+wait_for_systemd_active() { retry_until "${2:-30}" "${3:-1}" _systemd_unit_active_probe "$1"; }
+
+tailscale_status_json_field() {
+  local key="$1"
+  "${TAILSCALE_BIN:-tailscale}" status --json 2>/dev/null |
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('${key}',''))" 2>/dev/null || true
+}
+
+# Enroll this node with the pre-auth key (best-effort) and classify the outcome.
+# Shared by the managed and from_source paths so the diagnostics cannot drift.
+# Sets: TAILSCALE_BIN (pinned path); TAILSCALE_ENABLE_SERVE=1 only when the node
+# actually came online; TAILSCALE_AUTH_INVALID/TAILSCALE_NEEDS_LOGIN/
+# TAILSCALE_AUTH_URL for the epilogue guidance. Never fatal.
+enroll_tailscale_node() {
+  # Pin the binary path to avoid shell/MOTD output polluting command-path resolution.
+  TAILSCALE_BIN="$(command -v tailscale 2>/dev/null || true)"
+  [[ -z "${TAILSCALE_BIN}" ]] && TAILSCALE_BIN="/usr/bin/tailscale"
+  # Services run as the happier user; make it an approved tailscale operator.
+  "${TAILSCALE_BIN}" set --operator=happier >/dev/null 2>&1 || msg_warn "Could not set tailscale operator to happier (continuing)."
+
+  [[ -z "${TAILSCALE_AUTHKEY}" ]] && return 0
+
+  msg_info "Enrolling Tailscale (pre-auth key)"
+  if ! wait_for_systemd_active tailscaled 30 1; then
+    msg_warn "tailscaled service did not report active yet; continuing anyway."
+  fi
+  # The key is passed via a 600 temp file (`--auth-key=file:`), not argv, so it
+  # never appears in /proc/*/cmdline during the up-to-120s enrollment window.
+  local authkey_file=""
+  authkey_file="$(mktemp)"
+  chmod 600 "${authkey_file}"
+  printf '%s' "${TAILSCALE_AUTHKEY}" >"${authkey_file}"
+  local up_output="" up_exit=0
+  local up_args=(up "--auth-key=file:${authkey_file}")
+  if command -v timeout >/dev/null 2>&1; then
+    up_output="$(timeout 120 "${TAILSCALE_BIN}" "${up_args[@]}" 2>&1)" || up_exit=$?
+  else
+    up_output="$("${TAILSCALE_BIN}" "${up_args[@]}" 2>&1)" || up_exit=$?
+  fi
+  rm -f "${authkey_file}"
+  "${TAILSCALE_BIN}" set --operator=happier >/dev/null 2>&1 || true
+
+  if printf '%s' "${up_output}" | grep -Eiq 'invalid key|not valid|expired|unauthorized'; then
+    TAILSCALE_AUTH_INVALID="1"
+    TAILSCALE_NEEDS_LOGIN="1"
+    TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
+    msg_warn "Tailscale auth key was rejected."
+    msg_warn "tailscale up output: $(printf '%s' "${up_output}" | tail -n 1)"
+    msg_warn "Use a fresh reusable pre-auth key, or run tailscale up manually after install."
+  elif ((up_exit == 124 || up_exit == 137)); then
+    TAILSCALE_NEEDS_LOGIN="1"
+    TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
+    msg_warn "Tailscale enrollment did not complete within the timeout window."
+    if [[ -n "${TAILSCALE_AUTH_URL}" ]]; then
+      msg_warn "Tailscale login URL: ${TAILSCALE_AUTH_URL}"
+    else
+      msg_warn "Run inside the container: tailscale up"
+    fi
+  elif tailscale_wait_until_online 90 2; then
+    msg_ok "Tailscale enrollment attempted"
+    TAILSCALE_ENABLE_SERVE="1"
+  else
+    local ts_state=""
+    ts_state="$(tailscale_status_json_field BackendState)"
+    TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
+    msg_warn "Tailscale enrollment attempted, but node is not online yet (state: ${ts_state:-unknown})."
+    if [[ -n "${TAILSCALE_AUTH_URL}" ]]; then
+      TAILSCALE_NEEDS_LOGIN="1"
+      msg_warn "Tailscale still needs login. Auth URL: ${TAILSCALE_AUTH_URL}"
+      msg_warn "Your pre-auth key may be expired, one-time and already used, or not reusable."
+    else
+      msg_warn "Check Tailscale networking prerequisites (outbound access and /dev/net/tun availability)."
+    fi
+    if [[ -n "${up_output}" ]]; then
+      msg_warn "tailscale up output: $(printf '%s' "${up_output}" | tail -n 1)"
+    fi
+  fi
+  return 0
+}
+
+# Reset + create the Serve mapping for the local server port and resolve the
+# HTTPS URL, retrying — cert/DNS readiness can lag enrollment by 1-2 minutes on
+# fresh nodes. Shared by both install paths. Sets TAILSCALE_HTTPS_URL ("" when
+# not detected); returns 1 only when the node is not even online. Never fatal.
+enable_tailscale_serve_url() {
+  msg_info "Waiting for Tailscale HTTPS URL (this can take a minute or two on fresh nodes)"
+  if ! tailscale_wait_until_online 90 2; then
+    local ts_state=""
+    ts_state="$(tailscale_status_json_field BackendState)"
+    TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
+    msg_warn "Tailscale is not online yet; skipping automatic Serve URL detection (state: ${ts_state:-unknown})."
+    if [[ -n "${TAILSCALE_AUTH_URL}" ]]; then
+      TAILSCALE_NEEDS_LOGIN="1"
+      msg_warn "Tailscale still needs login. Auth URL: ${TAILSCALE_AUTH_URL}"
+    fi
+    return 1
+  fi
+  "${TAILSCALE_BIN:-tailscale}" serve reset >/dev/null 2>&1 || true
+  local _try
+  for _try in $(seq 1 45); do
+    "${TAILSCALE_BIN:-tailscale}" serve --bg "http://127.0.0.1:${HAPPIER_SERVER_PORT}" >/dev/null 2>&1 || true
+    TAILSCALE_HTTPS_URL="$(resolve_tailscale_https_url_with_retries 2 1 || true)"
+    if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
+      break
+    fi
+    sleep 3
+  done
+  if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
+    msg_ok "Tailscale Serve enabled"
+  else
+    msg_ok "Tailscale Serve attempted (no HTTPS URL detected yet)"
+  fi
+  return 0
 }
 
 # Install the Tailscale apt repo + package. Uses Tailscale's current keyring +
@@ -342,6 +488,49 @@ UPDATEEOF
   chmod +x /usr/bin/update
 }
 
+# Shared access-URL epilogue for both install methods (loopback/LAN + proxy +
+# detected Tailscale HTTPS URL). Method-specific tailscale recovery guidance
+# stays at the call sites.
+print_access_urls() {
+  if [[ "${SETUP_BIND}" == "loopback" ]]; then
+    echo -e "${INFO}${YW} Access (HTTP, inside container): ${CL}${TAB}${GATEWAY}${BGN}http://127.0.0.1:${HAPPIER_SERVER_PORT}${CL}"
+    echo -e "${INFO}${YW} Note:${CL} bind=loopback is not reachable from your LAN."
+  else
+    echo -e "${INFO}${YW} Access (HTTP): ${CL}${TAB}${GATEWAY}${BGN}http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}${CL}"
+  fi
+  if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
+    echo -e "${INFO}${YW} Access (HTTPS): ${CL}${TAB}${GATEWAY}${BGN}${PUBLIC_URL}${CL}"
+  else
+    echo -e "${INFO}${YW} IMPORTANT: ${CL}For remote web UI access you need HTTPS (Tailscale Serve or reverse proxy)."
+  fi
+  if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
+    echo -e "${INFO}${YW} Access (HTTPS): ${CL}${TAB}${GATEWAY}${BGN}${TAILSCALE_HTTPS_URL}${CL}"
+  fi
+}
+
+# Interactive daemon auth when requested (devbox + served UI + opt-in), then a
+# relay/service restart so the freshly-authenticated daemon is picked up.
+#   $1 = CLI to run the auth login with, $2 = unit to restart on success.
+run_daemon_auth_if_requested() {
+  local auth_cli="$1" restart_unit="$2"
+  [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]] || return 0
+  if run_daemon_auth_interactive "${auth_cli}" auth login --method=mobile --no-open --start-if-needed; then
+    if [[ "${AUTOSTART}" == "1" ]]; then
+      restart_happier_unit "${restart_unit}"
+    fi
+  fi
+  return 0
+}
+
+# Shared install tail for both methods, so the ordering cannot drift.
+finish_install() {
+  motd_ssh
+  customize
+  # customize() points /usr/bin/update at community-scripts; repoint it at the fork.
+  write_update_helper
+  cleanup_lxc
+}
+
 # Resolve the channel-matched Happier CLI and store it in HAPPIER_CLI_NAME /
 # HAPPIER_CLI_BIN, exiting on failure. Wraps the shared (non-fatal) resolver.
 resolve_installed_cli_path_or_fail() {
@@ -365,10 +554,10 @@ resolve_installed_cli_path_or_fail() {
 
 INSTALL_METHOD="$(printf '%s' "${INSTALL_METHOD_RAW}" | tr -d '\r' | xargs | tr '[:upper:]' '[:lower:]')"
 case "${INSTALL_METHOD}" in
-  ""|auto|installers|installer|selfhost|self-host)
+  "" | auto | installers | installer | selfhost | self-host)
     INSTALL_METHOD="installers"
     ;;
-  from_source|from-source|source|setup|setup-from-source|legacy)
+  from_source | from-source | source | setup | setup-from-source | legacy)
     INSTALL_METHOD="from_source"
     ;;
   *)
@@ -377,7 +566,7 @@ case "${INSTALL_METHOD}" in
     ;;
 esac
 
-PUBLIC_URL="$(normalize_url_no_trailing_slash "$PUBLIC_URL_RAW")"
+PUBLIC_URL="$(normalize_url_no_trailing_slash "${PUBLIC_URL_RAW}")"
 if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
   if [[ -z "${PUBLIC_URL}" ]]; then
     msg_error "REMOTE_ACCESS=proxy requires HAPPIER_PVE_PUBLIC_URL (public HTTPS URL)."
@@ -397,17 +586,7 @@ HAPPIER_CHANNEL="$(normalize_happier_channel "${HAPPIER_CHANNEL_RAW}")" || {
   exit 1
 }
 STACK_PACKAGE="$(printf '%s' "${STACK_PACKAGE_RAW}" | tr -d '\r' | xargs)"
-if [[ -z "${STACK_PACKAGE}" ]]; then
-  if [[ "${HAPPIER_CHANNEL}" == "preview" ]]; then
-    STACK_PACKAGE="@happier-dev/stack@next"
-  else
-    STACK_PACKAGE="@happier-dev/stack@latest"
-  fi
-fi
-if [[ "${STACK_PACKAGE}" == "@happier-dev/stack@preview" ]]; then
-  # Back-compat: "preview" maps to the npm dist-tag "next".
-  STACK_PACKAGE="@happier-dev/stack@next"
-fi
+STACK_PACKAGE="$(channel_default_stack_package "${HAPPIER_CHANNEL}" "${STACK_PACKAGE}")"
 if [[ -z "${STACK_PACKAGE}" ]]; then
   msg_error "Stack package spec is empty. Set HAPPIER_PVE_STACK_PACKAGE or HAPPIER_PVE_CHANNEL."
   exit 1
@@ -496,6 +675,7 @@ exec "${HAPPIER_CLI_BIN}" "\$@"
 EOF
   chmod +x "${wrapper_path}"
   chown -R happier:happier "/home/happier/.local"
+  # shellcheck disable=SC2016 # $HOME is intentionally literal (expanded at login, not here)
   if ! grep -Fq 'export PATH="$HOME/.local/bin:$PATH"' /home/happier/.profile 2>/dev/null; then
     printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >>/home/happier/.profile
     chown happier:happier /home/happier/.profile
@@ -540,33 +720,12 @@ install_managed_relay_runtime() {
     fi
     msg_ok "Installed Tailscale"
 
-    if command -v tailscale >/dev/null 2>&1; then
-      tailscale set --operator=happier >/dev/null 2>&1 || true
-    fi
-
-    if [[ -n "${TAILSCALE_AUTHKEY}" ]]; then
-      msg_info "Enrolling Tailscale (pre-auth key)"
-      if command -v timeout >/dev/null 2>&1; then
-        timeout 120 tailscale up --authkey="${TAILSCALE_AUTHKEY}" >/dev/null 2>&1 || true
-      else
-        tailscale up --authkey="${TAILSCALE_AUTHKEY}" >/dev/null 2>&1 || true
-      fi
-      tailscale set --operator=happier >/dev/null 2>&1 || true
-      TAILSCALE_ENABLE_SERVE="1"
-    fi
-
+    enroll_tailscale_node
     if [[ "${TAILSCALE_ENABLE_SERVE}" == "1" ]]; then
-      msg_info "Enabling Tailscale Serve (best-effort)"
-      tailscale serve reset >/dev/null 2>&1 || true
-      tailscale serve --bg "http://127.0.0.1:${HAPPIER_SERVER_PORT}" >/dev/null 2>&1 || true
-      TAILSCALE_HTTPS_URL="$(resolve_tailscale_https_url_with_retries 40 3 || true)"
-      if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-        msg_ok "Tailscale Serve enabled"
-        if [[ "${AUTOSTART}" == "1" ]]; then
-          "${HAPPIER_CLI_BIN}" relay host restart --mode system --channel "${HAPPIER_CHANNEL}" >/dev/null 2>&1 || true
-        fi
-      else
-        msg_ok "Tailscale Serve attempted (no HTTPS URL detected yet)"
+      enable_tailscale_serve_url || true
+      if [[ -n "${TAILSCALE_HTTPS_URL}" && "${AUTOSTART}" == "1" ]]; then
+        # Restart so the relay picks up the Tailscale URL for deep links/QR codes.
+        "${HAPPIER_CLI_BIN}" relay host restart --mode system --channel "${HAPPIER_CHANNEL}" >/dev/null 2>&1 || true
       fi
     fi
   fi
@@ -584,33 +743,33 @@ configure_devbox_server_profile() {
   mkdir -p /home/happier/.happier
   chown -R happier:happier /home/happier/.happier
 
-  local localApiUrl="http://127.0.0.1:${HAPPIER_SERVER_PORT}"
-  local canonicalUrl=""
+  local local_api_url="http://127.0.0.1:${HAPPIER_SERVER_PORT}"
+  local canonical_url=""
   if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-    canonicalUrl="${PUBLIC_URL}"
+    canonical_url="${PUBLIC_URL}"
   elif [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-    canonicalUrl="${TAILSCALE_HTTPS_URL}"
+    canonical_url="${TAILSCALE_HTTPS_URL}"
   elif [[ "${REMOTE_ACCESS}" == "none" ]]; then
-    canonicalUrl="http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
+    canonical_url="http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
   else
-    canonicalUrl="${localApiUrl}"
+    canonical_url="${local_api_url}"
   fi
 
-  local webappUrl=""
+  local webapp_url=""
   if [[ "${SERVE_UI}" == "1" ]]; then
-    webappUrl="${canonicalUrl}"
+    webapp_url="${canonical_url}"
   else
-    webappUrl="$(channel_hosted_webapp_url "${HAPPIER_CHANNEL}")"
+    webapp_url="$(channel_hosted_webapp_url "${HAPPIER_CHANNEL}")"
   fi
 
   msg_info "Configuring Happier server profile (devbox)"
-  local server_add_args=(server add --name "proxmox" --server-url "${canonicalUrl}" --use)
-  if [[ "${canonicalUrl}" == "${localApiUrl}" ]]; then
+  local server_add_args=(server add --name "proxmox" --server-url "${canonical_url}" --use)
+  if [[ "${canonical_url}" == "${local_api_url}" ]]; then
     :
   else
-    server_add_args+=(--local-server-url "${localApiUrl}")
+    server_add_args+=(--local-server-url "${local_api_url}")
   fi
-  [[ -n "${webappUrl}" ]] && server_add_args+=(--webapp-url "${webappUrl}")
+  [[ -n "${webapp_url}" ]] && server_add_args+=(--webapp-url "${webapp_url}")
   $STD sudo -u happier -H "${HAPPIER_CLI_BIN}" "${server_add_args[@]}" </dev/null
   msg_ok "Server profile saved"
 }
@@ -628,28 +787,46 @@ install_devbox_background_service() {
   msg_ok "Background service installed"
 }
 
-# Install the agent CLIs the daemon drives (claude, codex). npm-global so the
-# binaries are on PATH for the happier user too. The installers path doesn't bring
-# Node, so install it on demand when npm is missing (the from_source path already has it).
-# Non-fatal: a failure here still lets the daemon be wired to a later manual install.
+# Install the agent CLIs the daemon drives.
+# - claude: Anthropic's native installer, run as the happier user — the vendor-
+#   recommended method (Anthropic warns against root npm globals, and a root-owned
+#   global dir would break claude's self-update for the happier user). Lands in
+#   ~happier/.local/bin/claude, which the installer wires onto the user's PATH.
+# - codex: npm global install (the vendor-documented method). Node 24 is installed
+#   on demand for it — the installers path doesn't bring Node (from_source does).
+# Non-fatal throughout: a failure still lets the daemon be wired to a later manual install.
 install_devbox_agents() {
   if [[ "${INSTALL_AGENTS}" != "1" ]]; then
     return 0
   fi
+
+  msg_info "Installing claude (native installer, as happier)"
+  if $STD sudo -u happier -H bash -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+    msg_ok "Installed claude"
+  else
+    msg_warn "claude install failed (non-fatal) — install it manually and re-run update"
+  fi
+
   if ! command -v npm >/dev/null 2>&1; then
-    msg_info "Installing Node.js (required for agent CLIs)"
-    NODE_VERSION="24" setup_nodejs
-    msg_ok "Installed Node.js"
+    msg_info "Installing Node.js (required for codex)"
+    # Guarded: setup_nodejs returns non-zero on apt/repo failures and would otherwise
+    # abort the whole install via the ERR trap, contradicting the non-fatal contract.
+    if NODE_VERSION="24" setup_nodejs; then
+      msg_ok "Installed Node.js"
+    else
+      msg_warn "Node.js install failed (non-fatal) — skipping codex install"
+      return 0
+    fi
   fi
   if ! command -v npm >/dev/null 2>&1; then
-    msg_warn "npm not available; skipping claude/codex install"
+    msg_warn "npm not available; skipping codex install"
     return 0
   fi
-  msg_info "Installing agent CLIs (claude, codex)"
-  if $STD npm install -g @anthropic-ai/claude-code @openai/codex; then
-    msg_ok "Installed agent CLIs"
+  msg_info "Installing codex (npm)"
+  if $STD npm install -g @openai/codex; then
+    msg_ok "Installed codex"
   else
-    msg_warn "Agent CLI install failed (non-fatal) — install claude/codex manually and re-run update"
+    msg_warn "codex install failed (non-fatal) — install it manually and re-run update"
   fi
 }
 
@@ -657,19 +834,28 @@ install_devbox_agents() {
 # Discovers the daemon unit created by `service install --mode system`; if none is found
 # yet, warns and skips rather than writing to a guessed path.
 write_daemon_env_dropin() {
-  local claude_path codex_path daemon_unit dropin_dir dropin
+  local claude_path codex_path daemon_unit dropin_dir dropin envfile
   claude_path="$(command -v claude || true)"
+  # The native installer puts claude in the happier user's ~/.local/bin, which
+  # root's PATH does not include.
+  if [[ -z "${claude_path}" && -x /home/happier/.local/bin/claude ]]; then
+    claude_path="/home/happier/.local/bin/claude"
+  fi
   codex_path="$(command -v codex || true)"
+
+  # GitHub PATs are [A-Za-z0-9_] only; anything else would produce an unparseable
+  # env file (and is almost certainly a paste error), so refuse it up front.
+  if [[ -n "${DAEMON_GITHUB_PAT}" && ! "${DAEMON_GITHUB_PAT}" =~ ^[A-Za-z0-9_]+$ ]]; then
+    msg_warn "Provided GitHub PAT contains characters outside [A-Za-z0-9_]; skipping PAT wiring"
+    DAEMON_GITHUB_PAT=""
+  fi
 
   if [[ -z "${claude_path}" && -z "${codex_path}" && -z "${DAEMON_GITHUB_PAT}" ]]; then
     msg_warn "No claude/codex found and no PAT provided; skipping daemon env drop-in"
     return 0
   fi
 
-  daemon_unit="$(systemctl list-unit-files --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
-  if [[ -z "${daemon_unit}" ]]; then
-    daemon_unit="$(systemctl list-units --all --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
-  fi
+  daemon_unit="$(find_happier_daemon_unit)"
   if [[ -z "${daemon_unit}" ]]; then
     # No systemd unit (e.g. AUTOSTART=0 / manually-started daemon): a drop-in has nothing
     # to attach to, so print the exact env to set before starting the daemon manually
@@ -683,20 +869,44 @@ write_daemon_env_dropin() {
 
   dropin_dir="/etc/systemd/system/${daemon_unit}.d"
   dropin="${dropin_dir}/10-happier-agents.conf"
+  # The PAT goes in a separate root-only EnvironmentFile, NOT an Environment= directive:
+  # unit Environment= values are exposed to unprivileged users over D-Bus
+  # (systemctl show <unit> -p Environment), which would defeat the chmod 600.
+  # systemd only parses *.conf in the drop-in dir, so the .env file beside it is
+  # plain data referenced by path, never a unit fragment.
+  envfile="${dropin_dir}/10-happier-agents.env"
   msg_info "Wiring daemon environment (${daemon_unit})"
   mkdir -p "${dropin_dir}"
-  ( umask 077; {
-    printf '[Service]\n'
-    [[ -n "${claude_path}" ]] && printf 'Environment="HAPPIER_CLAUDE_PATH=%s"\n' "${claude_path}"
-    [[ -n "${codex_path}" ]] && printf 'Environment="HAPPIER_CODEX_PATH=%s"\n' "${codex_path}"
-    # NB: GitHub PATs are [A-Za-z0-9_] only; systemd Environment= treats % specially —
-    # don't reuse this line verbatim for secrets that may contain % or ".
-    [[ -n "${DAEMON_GITHUB_PAT}" ]] && printf 'Environment="GITHUB_PERSONAL_ACCESS_TOKEN=%s"\n' "${DAEMON_GITHUB_PAT}"
-  } >"${dropin}" ) || true
+  # NB: errexit is suspended inside an `if !` condition, so failures must be
+  # chained explicitly with `|| exit 1` for the subshell to report them.
+  if ! (
+    umask 077
+    {
+      printf '[Service]\n'
+      if [[ -n "${claude_path}" ]]; then printf 'Environment="HAPPIER_CLAUDE_PATH=%s"\n' "${claude_path}"; fi
+      if [[ -n "${codex_path}" ]]; then printf 'Environment="HAPPIER_CODEX_PATH=%s"\n' "${codex_path}"; fi
+      if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then printf 'EnvironmentFile=%s\n' "${envfile}"; fi
+    } >"${dropin}" || exit 1
+    if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then
+      printf 'GITHUB_PERSONAL_ACCESS_TOKEN=%s\n' "${DAEMON_GITHUB_PAT}" >"${envfile}" || exit 1
+    else
+      rm -f "${envfile}"
+    fi
+  ); then
+    msg_warn "Failed to write the daemon env drop-in (disk full/read-only?); skipping daemon env wiring"
+    rm -f "${dropin}" "${envfile}"
+    return 0
+  fi
   chmod 600 "${dropin}"
-  $STD systemctl daemon-reload || true
-  $STD systemctl restart "${daemon_unit}" || true
-  msg_ok "Wired daemon environment"
+  [[ -f "${envfile}" ]] && chmod 600 "${envfile}"
+  local wiring_rc=0
+  $STD systemctl daemon-reload || wiring_rc=$?
+  $STD systemctl restart "${daemon_unit}" || wiring_rc=$?
+  if [[ "${wiring_rc}" -eq 0 ]]; then
+    msg_ok "Wired daemon environment"
+  else
+    msg_warn "Daemon env drop-in written, but daemon-reload/restart failed (rc=${wiring_rc}) — check: systemctl status ${daemon_unit}"
+  fi
 }
 
 # Resolve the best client-facing URL to show the user before the QR appears.
@@ -715,17 +925,8 @@ resolve_daemon_auth_server_url() {
 
 # Best-effort wait until a local TCP port accepts connections (server warmup).
 # Non-fatal: returns 1 if it never comes up within the budget.
-wait_for_local_port() {
-  local port="$1" attempts="${2:-15}" i=1
-  while ((i <= attempts)); do
-    if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/${port}" 2>/dev/null; then
-      return 0
-    fi
-    sleep 1
-    i=$((i + 1))
-  done
-  return 1
-}
+_local_port_open_probe() { timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
+wait_for_local_port() { retry_until "${2:-15}" 1 _local_port_open_probe "$1"; }
 
 # Interactively authenticate the daemon during install (devbox + UI + opt-in).
 # Shows a QR code for the Happier mobile app. Best-effort: a 5-minute timeout
@@ -800,28 +1001,10 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   RELAY_SERVICE_NAME="$(channel_relay_service_name "${HAPPIER_CHANNEL}")"
   CLIENT_CLI_NAME="${HAPPIER_CLI_NAME}"
 
-  if [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]]; then
-    if run_daemon_auth_interactive "${HAPPIER_CLI_BIN}" auth login --method=mobile --no-open --start-if-needed; then
-      if [[ "${AUTOSTART}" == "1" ]]; then
-        restart_happier_unit "${RELAY_SERVICE_NAME}"
-      fi
-    fi
-  fi
+  run_daemon_auth_if_requested "${HAPPIER_CLI_BIN}" "${RELAY_SERVICE_NAME}"
 
-  if [[ "${SETUP_BIND}" == "loopback" ]]; then
-    echo -e "${INFO}${YW} Access (HTTP, inside container): ${CL}${TAB}${GATEWAY}${BGN}http://127.0.0.1:${HAPPIER_SERVER_PORT}${CL}"
-    echo -e "${INFO}${YW} Note:${CL} bind=loopback is not reachable from your LAN."
-  else
-    echo -e "${INFO}${YW} Access (HTTP): ${CL}${TAB}${GATEWAY}${BGN}http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}${CL}"
-  fi
-  if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-    echo -e "${INFO}${YW} Access (HTTPS): ${CL}${TAB}${GATEWAY}${BGN}${PUBLIC_URL}${CL}"
-  else
-    echo -e "${INFO}${YW} IMPORTANT: ${CL}For remote web UI access you need HTTPS (Tailscale Serve or reverse proxy)."
-  fi
-  if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-    echo -e "${INFO}${YW} Access (HTTPS): ${CL}${TAB}${GATEWAY}${BGN}${TAILSCALE_HTTPS_URL}${CL}"
-  elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
+  print_access_urls
+  if [[ -z "${TAILSCALE_HTTPS_URL}" && "${REMOTE_ACCESS}" == "tailscale" ]]; then
     echo -e "${INFO}${YW} Tailscale:${CL} enroll it inside the container, then enable Serve:"
     echo -e "${TAB}${GATEWAY}${BGN}tailscale up${CL}"
     echo -e "${TAB}${GATEWAY}${BGN}tailscale set --operator=happier${CL}"
@@ -846,13 +1029,7 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
     "${DAEMON_START_CMD}" \
     "${CLIENT_CLI_NAME}"
 
-  motd_ssh
-  customize
-
-  # customize() points /usr/bin/update at community-scripts; repoint it at the fork.
-  write_update_helper
-
-  cleanup_lxc
+  finish_install
   exit 0
 fi
 
@@ -900,7 +1077,10 @@ fi
 msg_info "Installing Happier (hstack setup-from-source) — package: ${STACK_PACKAGE_RESOLVED}"
 (
   # Avoid sudo inheriting an inaccessible cwd (e.g. /root) for the happier user.
-  cd /home/happier || { msg_error "Failed to access /home/happier"; exit 1; }
+  cd /home/happier || {
+    msg_error "Failed to access /home/happier"
+    exit 1
+  }
   $STD sudo -u happier -H env "${SETUP_ENV[@]}" \
     npx --yes -p "${STACK_PACKAGE_RESOLVED}" hstack setup-from-source "${SETUP_ARGS[@]}" </dev/null
 )
@@ -908,10 +1088,10 @@ msg_ok "Installed Happier (hstack setup-from-source)"
 
 # Resolve actual hstack binary and paths. Some setups may not use the default stack/workdir.
 HSTACK_BIN="/home/happier/.happier-stack/bin/hstack"
-if [[ ! -x "$HSTACK_BIN" ]]; then
+if [[ ! -x "${HSTACK_BIN}" ]]; then
   HSTACK_BIN="$(sudo -u happier -H bash -lc 'command -v hstack || true' | tr -d '\r')"
 fi
-if [[ -z "$HSTACK_BIN" || ! -x "$HSTACK_BIN" ]]; then
+if [[ -z "${HSTACK_BIN}" || ! -x "${HSTACK_BIN}" ]]; then
   msg_error "hstack binary not found after setup."
   exit 1
 fi
@@ -920,37 +1100,31 @@ HSTACK_HOME_DIR="/home/happier/.happier-stack"
 STACK_NAME="main"
 STACK_LABEL="dev.happier.stack"
 STACK_ENV_FILE="/home/happier/.happier/stacks/${STACK_NAME}/env"
-HSTACK_WHERE_JSON="$(sudo -u happier -H "$HSTACK_BIN" where --json 2>/dev/null || true)"
-if [[ -n "$HSTACK_WHERE_JSON" ]] && command -v jq >/dev/null 2>&1; then
-  _home_dir="$(printf '%s' "$HSTACK_WHERE_JSON" | jq -r '.homeDir // empty' 2>/dev/null || true)"
-  _stack_name="$(printf '%s' "$HSTACK_WHERE_JSON" | jq -r '.stack.name // empty' 2>/dev/null || true)"
-  _stack_label="$(printf '%s' "$HSTACK_WHERE_JSON" | jq -r '.stack.label // empty' 2>/dev/null || true)"
-  _stack_env="$(printf '%s' "$HSTACK_WHERE_JSON" | jq -r '.envFiles.main.path // empty' 2>/dev/null || true)"
-  [[ -n "$_home_dir" ]] && HSTACK_HOME_DIR="$_home_dir"
-  [[ -n "$_stack_name" ]] && STACK_NAME="$_stack_name"
-  [[ -n "$_stack_label" ]] && STACK_LABEL="$_stack_label"
-  [[ -n "$_stack_env" ]] && STACK_ENV_FILE="$_stack_env"
-fi
-if [[ ! -f "$STACK_ENV_FILE" ]]; then
+resolve_hstack_layout "${HSTACK_BIN}"
+[[ -n "${HSTACK_WHERE_HOME}" ]] && HSTACK_HOME_DIR="${HSTACK_WHERE_HOME}"
+[[ -n "${HSTACK_WHERE_NAME}" ]] && STACK_NAME="${HSTACK_WHERE_NAME}"
+[[ -n "${HSTACK_WHERE_LABEL}" ]] && STACK_LABEL="${HSTACK_WHERE_LABEL}"
+[[ -n "${HSTACK_WHERE_ENV}" ]] && STACK_ENV_FILE="${HSTACK_WHERE_ENV}"
+if [[ ! -f "${STACK_ENV_FILE}" ]]; then
   _fallback_env="$(find /home/happier/.happier/stacks -mindepth 2 -maxdepth 2 -type f -name env 2>/dev/null | head -n 1 || true)"
-  [[ -n "$_fallback_env" ]] && STACK_ENV_FILE="$_fallback_env"
+  [[ -n "${_fallback_env}" ]] && STACK_ENV_FILE="${_fallback_env}"
 fi
 HAPPIER_HOME="$(getent passwd happier | cut -d: -f6 | tr -d '\r' || true)"
-[[ -z "$HAPPIER_HOME" ]] && HAPPIER_HOME="/home/happier"
-mkdir -p "$(dirname "$STACK_ENV_FILE")"
-touch "$STACK_ENV_FILE"
-chown happier:happier "$STACK_ENV_FILE"
-chmod 600 "$STACK_ENV_FILE"
+[[ -z "${HAPPIER_HOME}" ]] && HAPPIER_HOME="/home/happier"
+mkdir -p "$(dirname "${STACK_ENV_FILE}")"
+touch "${STACK_ENV_FILE}"
+chown happier:happier "${STACK_ENV_FILE}"
+chmod 600 "${STACK_ENV_FILE}"
 
 set_env_kv() {
   local file="$1" key="$2" value="$3"
   local escaped
   # Escape the sed replacement metacharacters: backslash, ampersand, and the '|' delimiter.
-  escaped="$(printf '%s' "$value" | sed -e 's/[\\&|]/\\&/g')"
-  if grep -q "^${key}=" "$file"; then
-    sed -i "s|^${key}=.*|${key}=${escaped}|" "$file"
+  escaped="$(printf '%s' "${value}" | sed -e 's/[\\&|]/\\&/g')"
+  if grep -q "^${key}=" "${file}"; then
+    sed -i "s|^${key}=.*|${key}=${escaped}|" "${file}"
   else
-    printf '%s=%s\n' "$key" "$value" >>"$file"
+    printf '%s=%s\n' "${key}" "${value}" >>"${file}"
   fi
 }
 
@@ -960,85 +1134,53 @@ remove_env_kv() {
   sed -i "/^${key}=/d" "${file}"
 }
 
-tailscale_wait_until_online() {
-  local attempts="${1:-20}"
-  local sleep_s="${2:-2}"
-  local i=1
-  while (( i <= attempts )); do
-    if "$TAILSCALE_BIN" ip -4 >/dev/null 2>&1 || "$TAILSCALE_BIN" ip -6 >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep "$sleep_s"
-    i=$((i + 1))
-  done
-  return 1
-}
+# (tailscale_wait_until_online / tailscale_status_json_field / wait_for_systemd_active
+#  are defined in the shared helper section near the top of this file.)
 
-tailscale_status_json_field() {
-  local key="$1"
-  "$TAILSCALE_BIN" status --json 2>/dev/null \
-    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('${key}',''))" 2>/dev/null || true
-}
-
-wait_for_systemd_active() {
-  local unit="$1"
-  local attempts="${2:-30}"
-  local sleep_s="${3:-1}"
-  local i=1
-  while (( i <= attempts )); do
-    if systemctl is-active --quiet "$unit" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep "$sleep_s"
-    i=$((i + 1))
-  done
-  return 1
-}
-
-set_env_kv "$STACK_ENV_FILE" "HAPPIER_SERVER_HOST" "${SERVER_HOST}"
-set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_BIND_MODE" "${SETUP_BIND}"
+set_env_kv "${STACK_ENV_FILE}" "HAPPIER_SERVER_HOST" "${SERVER_HOST}"
+set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_BIND_MODE" "${SETUP_BIND}"
 if [[ "${INSTALL_TYPE}" == "server_only" ]]; then
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_DAEMON" "0"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_DAEMON" "0"
 fi
 if [[ "${SERVE_UI}" != "1" ]]; then
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_SERVE_UI" "0"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_SERVE_UI" "0"
 fi
 if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH" "1"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH" "1"
 fi
 if [[ -n "${SERVER_PORT_RAW}" ]]; then
   # Persist the port override so the from_source server actually binds it on start.
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_SERVER_PORT" "${HAPPIER_SERVER_PORT}"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_SERVER_PORT" "${HAPPIER_SERVER_PORT}"
 fi
 
 # Set a best-effort server URL early so autostart/manual start uses it on first boot.
 get_lxc_ip
 if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_SERVER_URL" "${PUBLIC_URL}"
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_PUBLIC_SERVER_URL" "${PUBLIC_URL}"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_SERVER_URL" "${PUBLIC_URL}"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_PUBLIC_SERVER_URL" "${PUBLIC_URL}"
 elif [[ "${REMOTE_ACCESS}" != "tailscale" ]]; then
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_SERVER_URL" "http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_PUBLIC_SERVER_URL" "http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_SERVER_URL" "http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_PUBLIC_SERVER_URL" "http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
 fi
 if [[ "${SERVE_UI}" == "1" && "${REMOTE_ACCESS}" == "proxy" ]]; then
   # Advertise that terminal-connect web UI is served from this same origin.
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_WEBAPP_URL" "${PUBLIC_URL}"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_WEBAPP_URL" "${PUBLIC_URL}"
 elif [[ "${SERVE_UI}" == "1" && "${REMOTE_ACCESS}" != "tailscale" && "${SETUP_BIND}" == "lan" ]]; then
   # Local-only installs can still serve the UI (but will not be reachable off-LAN without HTTPS).
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_WEBAPP_URL" "http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_WEBAPP_URL" "http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
 elif [[ "${SERVE_UI}" != "1" ]]; then
   # Prefer the hosted web app when the local UI is not served.
   FROM_SOURCE_HOSTED_WEBAPP_URL="$(channel_hosted_webapp_url "${HAPPIER_CHANNEL}")"
   if [[ -n "${FROM_SOURCE_HOSTED_WEBAPP_URL}" ]]; then
-    set_env_kv "$STACK_ENV_FILE" "HAPPIER_WEBAPP_URL" "${FROM_SOURCE_HOSTED_WEBAPP_URL}"
+    set_env_kv "${STACK_ENV_FILE}" "HAPPIER_WEBAPP_URL" "${FROM_SOURCE_HOSTED_WEBAPP_URL}"
   else
-    remove_env_kv "$STACK_ENV_FILE" "HAPPIER_WEBAPP_URL"
+    remove_env_kv "${STACK_ENV_FILE}" "HAPPIER_WEBAPP_URL"
   fi
 fi
 
 if [[ "${SERVE_UI}" == "1" ]]; then
   msg_info "Building Happier web UI (required to serve UI)"
-  $STD sudo -u happier -H "$HSTACK_BIN" build --no-tauri </dev/null
+  $STD sudo -u happier -H "${HSTACK_BIN}" build --no-tauri </dev/null
   msg_ok "Built Happier web UI"
 fi
 
@@ -1060,94 +1202,29 @@ if [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
   fi
   msg_ok "Installed Tailscale"
 
-  # Pin the binary path to avoid shell/MOTD output polluting command-path resolution.
-  TAILSCALE_BIN="$(command -v tailscale 2>/dev/null || true)"
-  [[ -z "$TAILSCALE_BIN" ]] && TAILSCALE_BIN="/usr/bin/tailscale"
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_TAILSCALE_BIN" "$TAILSCALE_BIN"
-  set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_TAILSCALE_SERVE" "1"
-  # hstack runs as the happier user; make it an approved tailscale operator.
-  "$TAILSCALE_BIN" set --operator=happier >/dev/null 2>&1 || msg_warn "Could not set tailscale operator to happier (continuing)."
-
-  if [[ -n "${TAILSCALE_AUTHKEY}" ]]; then
-    msg_info "Enrolling Tailscale (pre-auth key)"
-    if ! wait_for_systemd_active tailscaled 30 1; then
-      msg_warn "tailscaled service did not report active yet; continuing anyway."
-    fi
-    TAILSCALE_UP_OUTPUT=""
-    TAILSCALE_UP_EXIT=0
-    TAILSCALE_UP_ARGS=(up "--authkey=${TAILSCALE_AUTHKEY}")
-    if command -v timeout >/dev/null 2>&1; then
-      if TAILSCALE_UP_OUTPUT="$(timeout 120 "$TAILSCALE_BIN" "${TAILSCALE_UP_ARGS[@]}" 2>&1)"; then
-        TAILSCALE_UP_EXIT=0
-      else
-        TAILSCALE_UP_EXIT=$?
-      fi
-      if [[ $TAILSCALE_UP_EXIT -eq 124 || $TAILSCALE_UP_EXIT -eq 137 ]]; then
-        msg_warn "tailscale up timed out. Continuing with manual enrollment instructions."
-      fi
-    else
-      if TAILSCALE_UP_OUTPUT="$("$TAILSCALE_BIN" "${TAILSCALE_UP_ARGS[@]}" 2>&1)"; then
-        TAILSCALE_UP_EXIT=0
-      else
-        TAILSCALE_UP_EXIT=$?
-      fi
-    fi
-    "$TAILSCALE_BIN" set --operator=happier >/dev/null 2>&1 || true
-    if printf '%s' "${TAILSCALE_UP_OUTPUT}" | grep -Eiq 'invalid key|not valid|expired|unauthorized'; then
-      TAILSCALE_AUTH_INVALID="1"
-      TAILSCALE_NEEDS_LOGIN="1"
-      TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
-      msg_warn "Tailscale auth key was rejected."
-      msg_warn "tailscale up output: $(printf '%s' "${TAILSCALE_UP_OUTPUT}" | tail -n 1)"
-      msg_warn "Use a fresh reusable pre-auth key, or run tailscale up manually after install."
-    elif [[ $TAILSCALE_UP_EXIT -eq 124 || $TAILSCALE_UP_EXIT -eq 137 ]]; then
-      TAILSCALE_NEEDS_LOGIN="1"
-      TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
-      msg_warn "Tailscale enrollment did not complete within the timeout window."
-      if [[ -n "${TAILSCALE_AUTH_URL}" ]]; then
-        msg_warn "Tailscale login URL: ${TAILSCALE_AUTH_URL}"
-      else
-        msg_warn "Run inside the container: tailscale up"
-      fi
-    elif tailscale_wait_until_online 90 2; then
-      msg_ok "Tailscale enrollment attempted"
-      TAILSCALE_ENABLE_SERVE="1"
-    else
-      TAILSCALE_STATE="$(tailscale_status_json_field BackendState)"
-      TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
-      msg_warn "Tailscale enrollment attempted, but node is not online yet (state: ${TAILSCALE_STATE:-unknown})."
-      if [[ -n "${TAILSCALE_AUTH_URL}" ]]; then
-        TAILSCALE_NEEDS_LOGIN="1"
-        msg_warn "Tailscale still needs login. Auth URL: ${TAILSCALE_AUTH_URL}"
-        msg_warn "Your pre-auth key may be expired, one-time and already used, or not reusable."
-      else
-        msg_warn "Check Tailscale networking prerequisites (outbound access and /dev/net/tun availability)."
-      fi
-      if [[ -n "${TAILSCALE_UP_OUTPUT}" ]]; then
-        msg_warn "tailscale up output: $(printf '%s' "${TAILSCALE_UP_OUTPUT}" | tail -n 1)"
-      fi
-    fi
-  fi
+  enroll_tailscale_node
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_TAILSCALE_BIN" "${TAILSCALE_BIN}"
+  set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_TAILSCALE_SERVE" "1"
 fi
 
 if [[ "${AUTOSTART}" == "1" ]]; then
   # Ensure the logs directory exists before the systemd service starts,
   # otherwise StandardOutput=append:... fails with status=209/STDOUT.
-  mkdir -p "$(dirname "$STACK_ENV_FILE")/logs"
-  chown -R happier:happier "$(dirname "$STACK_ENV_FILE")/logs"
+  mkdir -p "$(dirname "${STACK_ENV_FILE}")/logs"
+  chown -R happier:happier "$(dirname "${STACK_ENV_FILE}")/logs"
   msg_info "Enabling autostart (systemd system service)"
   $STD env HOME="${HAPPIER_HOME}" \
-  HAPPIER_STACK_HOME_DIR="${HSTACK_HOME_DIR}" \
-  HAPPIER_STACK_ENV_FILE="${STACK_ENV_FILE}" \
-  "$HSTACK_BIN" service install --mode=system --system-user=happier
+    HAPPIER_STACK_HOME_DIR="${HSTACK_HOME_DIR}" \
+    HAPPIER_STACK_ENV_FILE="${STACK_ENV_FILE}" \
+    "${HSTACK_BIN}" service install --mode=system --system-user=happier
 
   # hstack currently writes WorkingDirectory=%h for system services.
   # For system units this can resolve to /root; force the explicit happier home.
   SYSTEMD_UNIT_PATH="/etc/systemd/system/${STACK_LABEL}.service"
-  if [[ -f "$SYSTEMD_UNIT_PATH" ]]; then
-    sed -i "s|^WorkingDirectory=.*|WorkingDirectory=${HAPPIER_HOME}|" "$SYSTEMD_UNIT_PATH"
-    if ! grep -q '^User=happier$' "$SYSTEMD_UNIT_PATH"; then
-      sed -i '/^\[Service\]/a User=happier' "$SYSTEMD_UNIT_PATH"
+  if [[ -f "${SYSTEMD_UNIT_PATH}" ]]; then
+    sed -i "s|^WorkingDirectory=.*|WorkingDirectory=${HAPPIER_HOME}|" "${SYSTEMD_UNIT_PATH}"
+    if ! grep -q '^User=happier$' "${SYSTEMD_UNIT_PATH}"; then
+      sed -i '/^\[Service\]/a User=happier' "${SYSTEMD_UNIT_PATH}"
     fi
     systemctl daemon-reload >/dev/null 2>&1 || true
     restart_happier_unit "${STACK_LABEL}.service"
@@ -1166,47 +1243,21 @@ fi
 
 if [[ "${REMOTE_ACCESS}" == "tailscale" && "${TAILSCALE_ENABLE_SERVE}" == "1" ]]; then
   msg_info "Enabling Tailscale Serve (best-effort)"
-  sudo -u happier -H "$HSTACK_BIN" tailscale enable >/dev/null 2>&1 || true
+  sudo -u happier -H "${HSTACK_BIN}" tailscale enable >/dev/null 2>&1 || true
 
-  # On fresh nodes, cert/DNS readiness can lag behind tailscale up by ~1-2 minutes.
-  # Keep retrying serve mapping before giving up to avoid manual follow-up in most installs.
-  msg_info "Waiting for Tailscale HTTPS URL (this can take a minute or two on fresh nodes)"
-  if tailscale_wait_until_online 90 2; then
-    "$TAILSCALE_BIN" serve reset >/dev/null 2>&1 || true
-    for _ in $(seq 1 45); do
-      "$TAILSCALE_BIN" serve --bg "http://127.0.0.1:${HAPPIER_SERVER_PORT}" >/dev/null 2>&1 || true
-      TAILSCALE_HTTPS_URL="$(resolve_tailscale_https_url_with_retries 2 1 || true)"
-      if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-        break
-      fi
-      sleep 3
-    done
-  else
-    TAILSCALE_STATE="$(tailscale_status_json_field BackendState)"
-    TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
-    msg_warn "Tailscale is not online yet; skipping automatic Serve URL detection (state: ${TAILSCALE_STATE:-unknown})."
-    if [[ -n "${TAILSCALE_AUTH_URL}" ]]; then
-      TAILSCALE_NEEDS_LOGIN="1"
-      msg_warn "Tailscale still needs login. Auth URL: ${TAILSCALE_AUTH_URL}"
-    fi
-  fi
+  enable_tailscale_serve_url || true
 
   if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-    set_env_kv "$STACK_ENV_FILE" "HAPPIER_STACK_SERVER_URL" "${TAILSCALE_HTTPS_URL}"
-    set_env_kv "$STACK_ENV_FILE" "HAPPIER_PUBLIC_SERVER_URL" "${TAILSCALE_HTTPS_URL}"
+    set_env_kv "${STACK_ENV_FILE}" "HAPPIER_STACK_SERVER_URL" "${TAILSCALE_HTTPS_URL}"
+    set_env_kv "${STACK_ENV_FILE}" "HAPPIER_PUBLIC_SERVER_URL" "${TAILSCALE_HTTPS_URL}"
     if [[ "${SERVE_UI}" == "1" ]]; then
-      set_env_kv "$STACK_ENV_FILE" "HAPPIER_WEBAPP_URL" "${TAILSCALE_HTTPS_URL}"
+      set_env_kv "${STACK_ENV_FILE}" "HAPPIER_WEBAPP_URL" "${TAILSCALE_HTTPS_URL}"
     fi
     # The service was started earlier without the Tailscale URL; restart so
     # it picks up the correct HAPPIER_STACK_SERVER_URL for deep links/QR codes.
     if [[ "${AUTOSTART}" == "1" ]]; then
       restart_happier_unit "${STACK_LABEL}.service"
     fi
-  fi
-  if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-    msg_ok "Tailscale Serve enabled"
-  else
-    msg_ok "Tailscale Serve attempted (no HTTPS URL detected yet)"
   fi
 elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
   if [[ "${TAILSCALE_AUTH_INVALID}" == "1" ]]; then
@@ -1220,29 +1271,10 @@ fi
 
 msg_ok "Install complete"
 
-if [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]]; then
-  if run_daemon_auth_interactive "${HSTACK_BIN}" auth login --method=mobile --no-open --start-if-needed; then
-    if [[ "${AUTOSTART}" == "1" ]]; then
-      restart_happier_unit "${STACK_LABEL}.service"
-    fi
-  fi
-fi
+run_daemon_auth_if_requested "${HSTACK_BIN}" "${STACK_LABEL}.service"
 
-if [[ "${SETUP_BIND}" == "loopback" ]]; then
-  echo -e "${INFO}${YW} Access (HTTP, inside container): ${CL}${TAB}${GATEWAY}${BGN}http://127.0.0.1:${HAPPIER_SERVER_PORT}${CL}"
-  echo -e "${INFO}${YW} Note:${CL} bind=loopback is not reachable from your LAN."
-else
-  echo -e "${INFO}${YW} Access (HTTP): ${CL}${TAB}${GATEWAY}${BGN}http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}${CL}"
-fi
-
-if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-  echo -e "${INFO}${YW} Access (HTTPS): ${CL}${TAB}${GATEWAY}${BGN}${PUBLIC_URL}${CL}"
-else
-  echo -e "${INFO}${YW} IMPORTANT: ${CL}For remote web UI access you need HTTPS (Tailscale Serve or reverse proxy)."
-fi
-if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
-  echo -e "${INFO}${YW} Access (HTTPS): ${CL}${TAB}${GATEWAY}${BGN}${TAILSCALE_HTTPS_URL}${CL}"
-elif [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
+print_access_urls
+if [[ -z "${TAILSCALE_HTTPS_URL}" && "${REMOTE_ACCESS}" == "tailscale" ]]; then
   [[ -z "${TAILSCALE_AUTH_URL}" ]] && TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
   if [[ "${TAILSCALE_AUTH_INVALID}" == "1" ]]; then
     echo -e "${INFO}${YW} Tailscale auth failed:${CL} provided pre-auth key was rejected."
@@ -1287,10 +1319,4 @@ print_next_steps \
   "${DAEMON_START_CMD}" \
   "${CLIENT_CLI_NAME}"
 
-motd_ssh
-customize
-
-# customize() points /usr/bin/update at community-scripts; repoint it at the fork.
-write_update_helper
-
-cleanup_lxc
+finish_install
