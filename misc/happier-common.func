@@ -261,8 +261,20 @@ resolve_installed_cli_for_channel() {
   cli_name="$(channel_cli_name "$1")" || return 1
   local candidate=""
   candidate="$(command -v "${cli_name}" 2>/dev/null || true)"
-  if [[ -z "${candidate}" && -x "/opt/happier/cli/bin/${cli_name}" ]]; then
-    candidate="/opt/happier/cli/bin/${cli_name}"
+  if [[ -z "${candidate}" ]]; then
+    # Known bootstrap layouts, old to new: legacy /opt bin dir, the requested
+    # BIN_DIR shim, and the installer's managed current/ dir under INSTALL_DIR.
+    local _cand=""
+    for _cand in \
+      "/opt/happier/cli/bin/${cli_name}" \
+      "/usr/local/bin/${cli_name}" \
+      "/opt/happier/cli/cli/current/${cli_name}" \
+      "/opt/happier/cli/current/${cli_name}"; do
+      if [[ -x "${_cand}" ]]; then
+        candidate="${_cand}"
+        break
+      fi
+    done
   fi
   printf '%s' "${candidate}"
 }

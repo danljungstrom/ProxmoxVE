@@ -649,14 +649,18 @@ install_happier_cli_binary() {
   # verified by that installer; the UI bundle here is minisign + sha256 verified.
   # The bootstrap script itself is not pinned — accepted risk for the install flow.
   msg_info "Installing Happier CLI — channel: ${HAPPIER_CHANNEL}"
-  HAPPIER_CHANNEL="${HAPPIER_CHANNEL}" \
+  # NB: the env overrides MUST prefix the consuming `bash`, not `curl` — an env
+  # prefix applies only to the first command of a pipeline, so putting it on the
+  # curl side hands the bootstrap its $HOME defaults (/root/.happier), which the
+  # happier service user cannot execute.
+  curl -fsSL "https://happier.dev/install" |
     HAPPIER_PRODUCT="cli" \
-    HAPPIER_INSTALL_DIR="/opt/happier/cli" \
-    HAPPIER_BIN_DIR="/usr/local/bin" \
-    HAPPIER_WITH_DAEMON="0" \
-    HAPPIER_NO_PATH_UPDATE="1" \
-    HAPPIER_NONINTERACTIVE="1" \
-    curl -fsSL "https://happier.dev/install" | $STD bash -s -- --channel "${HAPPIER_CHANNEL}"
+      HAPPIER_INSTALL_DIR="/opt/happier/cli" \
+      HAPPIER_BIN_DIR="/usr/local/bin" \
+      HAPPIER_WITH_DAEMON="0" \
+      HAPPIER_NO_PATH_UPDATE="1" \
+      HAPPIER_NONINTERACTIVE="1" \
+      $STD bash -s -- --channel "${HAPPIER_CHANNEL}"
 
   resolve_installed_cli_path_or_fail
   msg_ok "Installed Happier CLI"
