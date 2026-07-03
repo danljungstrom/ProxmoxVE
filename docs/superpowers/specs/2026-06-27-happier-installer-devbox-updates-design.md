@@ -94,3 +94,30 @@ Update (devbox): `update_script` → UI bundle refresh → `self update` → `re
 ## Rollout
 
 New feature branch off `daemon-auth`. Commit grouped by component (agent-provisioning+drop-in, PAT, auto-update, update-daemon-restart, docs) via `/commit`. LXC-test, then PR to `happier-dev/main` after the audit/sync PRs land. No push/PR until LXC-green.
+
+## Deviations (as implemented, 2026-07-01)
+
+Recorded post-implementation on `feat/devbox-agents-autoupdate`; the sections above are kept
+as approved for history.
+
+- **A.1 premise wrong — Node is NOT pre-present on the installers devbox path.** The managed
+  installer ships a prebuilt CLI binary without Node; only the from_source path brings Node.
+  `install_devbox_agents` therefore installs Node 24 on demand when npm is missing
+  (`install/happier-install.sh`, guarded non-fatal), instead of assuming it exists.
+- **Out-of-scope list overtaken by events.** The from_source devbox path also received the
+  agent provisioning + daemon env drop-in (same helpers, second call site), and
+  `misc/happier-common.func` + `.github/workflows/happier-lint.yml` received lint-driven
+  touch-ups during review.
+- **PAT storage hardened beyond the spec.** The daemon PAT is written to a root-owned 600
+  `EnvironmentFile=` referenced from the drop-in, not an `Environment=` directive (unit
+  Environment values are readable by unprivileged users via D-Bus). The PAT is validated
+  against `^[A-Za-z0-9_]+$` before writing.
+- **claude install method changed from npm to the native installer.** Anthropic's docs
+  recommend the native installer and warn against root npm globals (which would also break
+  claude's self-update for the happier user). claude now installs via
+  `curl -fsSL https://claude.ai/install.sh | bash` as the happier user (lands in
+  `~happier/.local/bin/claude`; the daemon drop-in resolves that path). codex stays on the
+  vendor-documented npm global install; Node 24 is installed on demand for it.
+- **Tailscale pre-auth key no longer passed on argv.** `tailscale up --auth-key=file:<600
+  temp file>` instead of `--authkey=<key>`, so the key is not readable in /proc/*/cmdline
+  during the enrollment window.

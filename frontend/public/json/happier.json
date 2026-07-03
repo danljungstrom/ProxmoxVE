@@ -45,7 +45,15 @@
             "type": "info"
         },
         {
-            "text": "Default local relay port is 3005 and can be overridden with HAPPIER_PVE_SERVER_PORT. Preview/dev installer-mode configs use channel-specific paths such as /etc/happier-preview/server.env and /etc/happier-dev/server.env.",
+            "text": "Default local server port is 3005 and can be overridden with HAPPIER_PVE_SERVER_PORT (both install methods). The config_path /etc/happier/server.env applies to the default installer method; from-source installs store config at /home/happier/.happier/stacks/main/env instead. Preview/dev installer-mode configs use channel-specific paths such as /etc/happier-preview/server.env and /etc/happier-dev/server.env.",
+            "type": "info"
+        },
+        {
+            "text": "Devbox extras: HAPPIER_PVE_INSTALL_AGENTS (default 1) installs claude+codex on devbox installs — set 0 to skip; HAPPIER_PVE_GITHUB_PAT sets the daemon's GitHub token; HAPPIER_PVE_AUTO_UPDATE=1 (+HAPPIER_PVE_AUTO_UPDATE_AT=HH:MM, default 04:00) enables the built-in auto-update timer (default installer method only — from-source installs are updated manually via the Update action guidance). A devbox runs agent sessions, so 8GB+ RAM is recommended.",
+            "type": "info"
+        },
+        {
+            "text": "Supply-chain pinning: INSTALLER_REPO (default happier-dev/ProxmoxVE) and INSTALLER_REF (default main) select where the install and update scripts are fetched from. Export INSTALLER_REF=<tag-or-sha> before installing for a reproducible, pinned install; the generated /usr/bin/update helper honors the same pins.",
             "type": "info"
         }
     ]

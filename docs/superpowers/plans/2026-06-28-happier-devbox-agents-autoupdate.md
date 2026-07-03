@@ -8,6 +8,13 @@
 
 **Tech Stack:** Bash (Proxmox community-scripts helper model), whiptail, systemd drop-ins, npm-global agent installs. No unit-test harness in this domain — verification per task is `bash -n` + `shellcheck` (the repo's `happier-lint` workflow) plus the LXC integration matrix from the spec (`docs/superpowers/specs/2026-06-27-happier-installer-devbox-updates-design.md`).
 
+> **Status (2026-07-01):** Tasks 1-7 implemented and committed on `feat/devbox-agents-autoupdate`
+> (landed as the "devbox agents, daemon PAT, and opt-in auto-update" feature commit after the
+> branch history was regrouped). Deviation from Task 3:
+> Node 24 is NOT pre-present on the installers path — `install_devbox_agents` installs it on
+> demand (guarded, non-fatal) instead of only warning when npm is missing. Remaining: the LXC
+> integration matrix and the eventual PR (unticked below).
+
 **Branch:** `feat/devbox-agents-autoupdate` (already created off `daemon-auth`; the spec is committed there).
 
 **Conventions to follow (existing in these files):** `msg_info`/`msg_ok`/`msg_warn` for output; `$STD` to silence verbose cmds; `sudo -u happier -H` for happier-user actions; `printf` (never heredoc) for writing secret-bearing files; `chmod 600` for secrets; best-effort steps guarded with `|| true` so the ERR trap doesn't abort.
@@ -27,7 +34,7 @@
 **Files:**
 - Modify: `install/happier-install.sh` (after line 71, the `SERVER_PORT_RAW` config var)
 
-- [ ] **Step 1: Add the four new env reads**
+- [x] **Step 1: Add the four new env reads**
 
 After the existing `SERVER_PORT_RAW="${HAPPIER_PVE_SERVER_PORT:-}"` line, add:
 
@@ -38,7 +45,7 @@ AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"            # 1 | 0 (enable managed a
 AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"  # HH:MM for the auto-update timer
 ```
 
-- [ ] **Step 2: Validate the time format**
+- [x] **Step 2: Validate the time format**
 
 Immediately below the block above, add a guard that falls back on a bad value (per spec error-handling):
 
@@ -49,12 +56,12 @@ if [[ "${AUTO_UPDATE}" == "1" && ! "${AUTO_UPDATE_AT}" =~ ^([01][0-9]|2[0-3]):[0
 fi
 ```
 
-- [ ] **Step 3: Syntax check**
+- [x] **Step 3: Syntax check**
 
 Run: `bash -n install/happier-install.sh`
 Expected: no output (exit 0).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add install/happier-install.sh
@@ -68,7 +75,7 @@ git commit -m "feat(happier): read new devbox/auto-update install knobs"
 **Files:**
 - Modify: `install/happier-install.sh:install_managed_relay_runtime` (the `relay_args` block, around line 500-507)
 
-- [ ] **Step 1: Append the flags when enabled**
+- [x] **Step 1: Append the flags when enabled**
 
 In `install_managed_relay_runtime`, after the `SERVER_PORT_RAW` `relay_args+=(...)` block (line 502-504) and before the `REMOTE_ACCESS` block, add:
 
@@ -78,12 +85,12 @@ In `install_managed_relay_runtime`, after the `SERVER_PORT_RAW` `relay_args+=(..
   fi
 ```
 
-- [ ] **Step 2: Syntax check**
+- [x] **Step 2: Syntax check**
 
 Run: `bash -n install/happier-install.sh`
 Expected: exit 0.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add install/happier-install.sh
@@ -99,7 +106,7 @@ Satisfies LXC case 3 (auto-update timer active/absent).
 **Files:**
 - Modify: `install/happier-install.sh` (add helper after `install_devbox_background_service`, i.e. after line 618)
 
-- [ ] **Step 1: Add `install_devbox_agents`**
+- [x] **Step 1: Add `install_devbox_agents`**
 
 ```bash
 # Install the agent CLIs the daemon drives (claude, codex). Node is already present
@@ -122,12 +129,12 @@ install_devbox_agents() {
 }
 ```
 
-- [ ] **Step 2: Syntax check**
+- [x] **Step 2: Syntax check**
 
 Run: `bash -n install/happier-install.sh`
 Expected: exit 0.
 
-- [ ] **Step 3: Commit (with Task 4 — keep the devbox-provisioning pair in one commit; commit after Task 4)**
+- [x] **Step 3: Commit (with Task 4 — keep the devbox-provisioning pair in one commit; commit after Task 4)**
 
 ---
 
@@ -136,7 +143,7 @@ Expected: exit 0.
 **Files:**
 - Modify: `install/happier-install.sh` (add helper after `install_devbox_agents`)
 
-- [ ] **Step 1: Add `write_daemon_env_dropin`**
+- [x] **Step 1: Add `write_daemon_env_dropin`**
 
 ```bash
 # Write a chmod-600 systemd drop-in giving the daemon the agent paths (+ optional PAT).
@@ -178,7 +185,7 @@ write_daemon_env_dropin() {
 }
 ```
 
-- [ ] **Step 2: Call both helpers in the devbox flow**
+- [x] **Step 2: Call both helpers in the devbox flow**
 
 Find the call site of `install_devbox_background_service` (grep: `grep -n 'install_devbox_background_service$' install/happier-install.sh` — the invocation, not the definition). Immediately after that call, add:
 
@@ -189,12 +196,12 @@ Find the call site of `install_devbox_background_service` (grep: `grep -n 'insta
 
 Match the surrounding indentation. (Both are no-ops/safe outside devbox because the call site is already inside the devbox branch; if the call site is not clearly devbox-gated, wrap the two calls in `if [[ "${INSTALL_TYPE}" == "devbox" ]]; then ... fi`.)
 
-- [ ] **Step 3: Syntax check**
+- [x] **Step 3: Syntax check**
 
 Run: `bash -n install/happier-install.sh && grep -n 'install_devbox_agents\|write_daemon_env_dropin' install/happier-install.sh`
 Expected: exit 0; shows the two definitions + the two call-site invocations.
 
-- [ ] **Step 4: Commit (Tasks 3+4 together)**
+- [x] **Step 4: Commit (Tasks 3+4 together)**
 
 ```bash
 git add install/happier-install.sh
@@ -210,7 +217,7 @@ Satisfies LXC cases 1 and 2 (agents on PATH; drop-in with paths/PAT at mode 600)
 **Files:**
 - Modify: `ct/happier.sh:app_questions` (var defaults around line 168-176; add prompts near the existing toggles; exports near the existing `export HAPPIER_PVE_*`)
 
-- [ ] **Step 1: Add defaults**
+- [x] **Step 1: Add defaults**
 
 In `app_questions`, alongside the existing `HAPPIER_PVE_*` initializations (after `HAPPIER_PVE_STACK_PACKAGE=...`, ~line 176), add:
 
@@ -221,7 +228,7 @@ In `app_questions`, alongside the existing `HAPPIER_PVE_*` initializations (afte
   HAPPIER_PVE_AUTO_UPDATE_AT="04:00"
 ```
 
-- [ ] **Step 2: Add the devbox agent toggle**
+- [x] **Step 2: Add the devbox agent toggle**
 
 Inside the existing devbox-gated section (reuse the `[[ "$HAPPIER_PVE_INSTALL_TYPE" == "devbox" ... ]]` block near line 245, or add a `devbox`-gated block). Add:
 
@@ -240,7 +247,7 @@ Inside the existing devbox-gated section (reuse the `[[ "$HAPPIER_PVE_INSTALL_TY
   fi
 ```
 
-- [ ] **Step 3: Add the auto-update toggle**
+- [x] **Step 3: Add the auto-update toggle**
 
 After the agent block (still in `app_questions`), add:
 
@@ -257,7 +264,7 @@ After the agent block (still in `app_questions`), add:
   fi
 ```
 
-- [ ] **Step 4: Export the new vars**
+- [x] **Step 4: Export the new vars**
 
 Where the existing `export HAPPIER_PVE_*` statements are (near line 277), add:
 
@@ -265,12 +272,12 @@ Where the existing `export HAPPIER_PVE_*` statements are (near line 277), add:
   export HAPPIER_PVE_INSTALL_AGENTS HAPPIER_PVE_GITHUB_PAT HAPPIER_PVE_AUTO_UPDATE HAPPIER_PVE_AUTO_UPDATE_AT
 ```
 
-- [ ] **Step 5: Syntax check**
+- [x] **Step 5: Syntax check**
 
 Run: `bash -n ct/happier.sh`
 Expected: exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ct/happier.sh
@@ -284,7 +291,7 @@ git commit -m "feat(happier): prompt for devbox agents, daemon PAT, and auto-upd
 **Files:**
 - Modify: `ct/happier.sh:update_script` (the managed/installers branch, after the relay restart at line 92)
 
-- [ ] **Step 1: Add a daemon restart after the relay restart**
+- [x] **Step 1: Add a daemon restart after the relay restart**
 
 After `restart_happier_unit "$(channel_relay_service_name "${installer_channel}")"` (line 92), add:
 
@@ -300,12 +307,12 @@ After `restart_happier_unit "$(channel_relay_service_name "${installer_channel}"
 
 (Confirm `cli_bin` is the variable name in scope at that point — grep around line 86 shows `"${cli_bin}" self update`; reuse it. If it is named differently, use that name.)
 
-- [ ] **Step 2: Syntax check**
+- [x] **Step 2: Syntax check**
 
 Run: `bash -n ct/happier.sh`
 Expected: exit 0.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add ct/happier.sh
@@ -321,7 +328,7 @@ Satisfies LXC case 4 (relay + daemon both restart on update).
 **Files:**
 - Modify: `json/happier.json` (the `notes` array)
 
-- [ ] **Step 1: Add a notes entry**
+- [x] **Step 1: Add a notes entry**
 
 Append one object to the `notes` array (mind the trailing comma on the previous entry):
 
@@ -332,12 +339,12 @@ Append one object to the `notes` array (mind the trailing comma on the previous 
         }
 ```
 
-- [ ] **Step 2: Validate JSON**
+- [x] **Step 2: Validate JSON**
 
 Run: `python3 -c "import json; json.load(open('json/happier.json')); print('ok')"`
 Expected: `ok`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add json/happier.json
@@ -348,8 +355,8 @@ git commit -m "docs(happier): document devbox/auto-update install knobs"
 
 ## Final verification (before any push/PR)
 
-- [ ] `bash -n ct/happier.sh install/happier-install.sh` → exit 0.
-- [ ] `shellcheck` on both (honoring `.vscode/.shellcheckrc`) → no new errors. (The `happier-lint` workflow runs this on the eventual PR.)
+- [x] `bash -n ct/happier.sh install/happier-install.sh` → exit 0.
+- [x] `shellcheck` on both (honoring `.shellcheckrc`) → no new errors. (The `happier-lint` workflow runs this on the eventual PR.)
 - [ ] **LXC integration matrix** from the spec (cases 1-6): real devbox install with agents on/off, PAT via env, auto-update on/off, run the Update action, and a server_only regression check. Confirm: drop-in exists at mode 600 with the expected keys; `command -v claude/codex` resolve; `<serviceName>-updater.timer` active iff auto-update on; daemon + relay both restart on update without killing a live session; server_only touches none of it. A health probe should now report `daemon_required_env` satisfied.
 - [ ] Only after LXC-green: PR `feat/devbox-agents-autoupdate` → `happier-dev/main` (cross-fork from the `danljungstrom` fork), after the audit/sync PRs land.
 
