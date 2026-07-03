@@ -49,10 +49,11 @@ REMOTE_ACCESS="${HAPPIER_PVE_REMOTE_ACCESS:-none}"     # none | proxy | tailscal
 INSTALL_METHOD_RAW="${HAPPIER_PVE_INSTALL_METHOD:-installers}" # installers | from_source (aliases: auto|selfhost|legacy)
 TAILSCALE_AUTHKEY="${HAPPIER_PVE_TAILSCALE_AUTHKEY:-}" # optional
 PUBLIC_URL_RAW="${HAPPIER_PVE_PUBLIC_URL:-}"           # required when REMOTE_ACCESS=proxy
+DAEMON_AUTH="${HAPPIER_PVE_DAEMON_AUTH:-0}"            # 1 | 0 (interactive QR auth during install)
+DAEMON_AUTH_DONE="0"
 HAPPIER_CHANNEL_RAW="${HAPPIER_PVE_CHANNEL:-${HAPPIER_PVE_HSTACK_CHANNEL:-stable}}" # stable | preview | dev
 STACK_PACKAGE_RAW="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}"    # e.g. @happier-dev/stack@latest
 SERVER_PORT_RAW="${HAPPIER_PVE_SERVER_PORT:-}"                                       # optional explicit PORT override
-HAPPIER_RELEASE_GITHUB_REPO="${HAPPIER_GITHUB_REPO:-happier-dev/happier}"
 TAILSCALE_ENABLE_SERVE="0"
 TAILSCALE_HTTPS_URL=""
 TAILSCALE_NEEDS_LOGIN="0"
@@ -67,6 +68,9 @@ RWQ85PZ7FyiukYbL3qv/bKnwgbT68wLVzotapeMFIb8n+c7pBQ7U8W2t
 EOF
 )"
 MINISIGN_PUBKEY="${HAPPIER_MINISIGN_PUBKEY:-${DEFAULT_MINISIGN_PUBKEY}}"
+if [[ -n "${HAPPIER_MINISIGN_PUBKEY:-}" && "${HAPPIER_MINISIGN_PUBKEY}" != "${DEFAULT_MINISIGN_PUBKEY}" ]]; then
+  msg_warn "Using a NON-DEFAULT minisign signing key (HAPPIER_MINISIGN_PUBKEY) — the bundle signature trust anchor is overridden."
+fi
 
 normalize_url_no_trailing_slash() {
   local v
@@ -145,12 +149,6 @@ channel_relay_service_name() {
   local suffix=""
   suffix="$(channel_suffix "$1")" || return 1
   printf '%s' "happier-server${suffix}"
-}
-
-channel_config_env_path() {
-  local suffix=""
-  suffix="$(channel_suffix "$1")" || return 1
-  printf '%s' "/etc/happier${suffix}/server.env"
 }
 
 channel_data_dir() {
@@ -310,13 +308,50 @@ resolve_ui_extract_root() {
   return 1
 }
 
+# Install the Tailscale apt repo + package. Uses Tailscale's current keyring +
+# .list files (fetched to temp and verified non-empty) so a transient network
+# failure produces an actionable error instead of a half-written keyring/source.
+install_tailscale_pkg() {
+  local os_id="" os_codename=""
+  # shellcheck disable=SC1091
+  . /etc/os-release 2>/dev/null || true
+  os_id="${ID:-}"
+  os_codename="${VERSION_CODENAME:-}"
+  if [[ -z "${os_id}" || -z "${os_codename}" ]]; then
+    msg_error "Could not determine OS id/codename from /etc/os-release for the Tailscale repo."
+    return 1
+  fi
+
+  local base="https://pkgs.tailscale.com/stable/${os_id}/${os_codename}"
+  local keyring_tmp="" list_tmp=""
+  keyring_tmp="$(mktemp)"
+  list_tmp="$(mktemp)"
+  if ! curl -fsSL "${base}.noarmor.gpg" -o "${keyring_tmp}" || [[ ! -s "${keyring_tmp}" ]]; then
+    rm -f "${keyring_tmp}" "${list_tmp}"
+    msg_error "Failed to download the Tailscale signing key for ${os_id}/${os_codename}."
+    return 1
+  fi
+  if ! curl -fsSL "${base}.tailscale-keyring.list" -o "${list_tmp}" || [[ ! -s "${list_tmp}" ]]; then
+    rm -f "${keyring_tmp}" "${list_tmp}"
+    msg_error "Failed to download the Tailscale apt source list for ${os_id}/${os_codename}."
+    return 1
+  fi
+  install -m 0644 "${keyring_tmp}" /usr/share/keyrings/tailscale-archive-keyring.gpg
+  install -m 0644 "${list_tmp}" /etc/apt/sources.list.d/tailscale.list
+  rm -f "${keyring_tmp}" "${list_tmp}"
+
+  $STD apt-get update -qq
+  $STD apt-get install -y tailscale
+  systemctl enable -q --now tailscaled
+}
+
 install_managed_ui_bundle() {
   local channel="$1"
   local ui_root
   ui_root="$(channel_data_dir "${channel}")/ui-web"
   local ui_versions_dir="${ui_root}/versions"
   local ui_current_dir="${ui_root}/current"
-  local release_repo="${HAPPIER_RELEASE_GITHUB_REPO:-happier-dev/happier}"
+  local release_repo="${HAPPIER_GITHUB_REPO:-happier-dev/happier}"
   local temp_dir=""
   temp_dir="$(mktemp -d)"
   local release_json="${temp_dir}/release.json"
@@ -401,11 +436,16 @@ install_managed_ui_bundle() {
     exit 1
   fi
 
+  # Stage into a temp dir and swap atomically so a failed copy leaves the
+  # previously-installed bundle intact (no dangling/partial current symlink).
   local version_dir="${ui_versions_dir}/happier-ui-web-${version}"
+  local staging_dir="${version_dir}.tmp.$$"
   mkdir -p "${ui_versions_dir}"
+  rm -rf "${staging_dir}"
+  mkdir -p "${staging_dir}"
+  cp -a "${artifact_root}/." "${staging_dir}/"
   rm -rf "${version_dir}"
-  mkdir -p "${version_dir}"
-  cp -a "${artifact_root}/." "${version_dir}/"
+  mv "${staging_dir}" "${version_dir}"
   ln -sfn "${version_dir}" "${ui_current_dir}"
   rm -rf "${temp_dir}"
   printf '%s' "${ui_current_dir}"
@@ -594,15 +634,10 @@ install_managed_relay_runtime() {
 
   if [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
     msg_info "Installing Tailscale"
-    ID=$(grep "^ID=" /etc/os-release | cut -d"=" -f2)
-    VER=$(grep "^VERSION_CODENAME=" /etc/os-release | cut -d"=" -f2)
-    curl -fsSL "https://pkgs.tailscale.com/stable/${ID}/${VER}.noarmor.gpg" \
-      | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-    echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/${ID} ${VER} main" \
-      >/etc/apt/sources.list.d/tailscale.list
-    $STD apt-get update -qq
-    $STD apt-get install -y tailscale
-    systemctl enable -q --now tailscaled
+    if ! install_tailscale_pkg; then
+      msg_error "Tailscale installation failed. Check container network/DNS, then re-run."
+      exit 1
+    fi
     msg_ok "Installed Tailscale"
 
     if command -v tailscale >/dev/null 2>&1; then
@@ -681,11 +716,82 @@ configure_devbox_server_profile() {
 }
 
 install_devbox_background_service() {
+  # NOTE: the from_source path sets HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH=1 in the
+  # hstack env file so the daemon waits for auth before going live. The managed
+  # relay runtime here uses a different config contract; until its equivalent
+  # flag is confirmed, we rely on the interactive auth step + --start-if-needed
+  # rather than writing an env the runtime may ignore. Revisit after LXC testing.
   msg_info "Installing background service (devbox)"
   HOME="/home/happier" \
     HAPPIER_HOME_DIR="/home/happier/.happier" \
     $STD sudo -u happier -H "${HAPPIER_CLI_BIN}" --server proxmox service install --mode system --system-user happier --yes </dev/null
   msg_ok "Background service installed"
+}
+
+# Resolve the best client-facing URL to show the user before the QR appears.
+resolve_daemon_auth_server_url() {
+  if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
+    printf '%s' "${TAILSCALE_HTTPS_URL}"
+  elif [[ -n "${PUBLIC_URL}" ]]; then
+    printf '%s' "${PUBLIC_URL}"
+  else
+    printf '%s' "http://${LOCAL_IP}:${HAPPIER_SERVER_PORT}"
+  fi
+}
+
+# Best-effort wait until a local TCP port accepts connections (server warmup).
+# Non-fatal: returns 1 if it never comes up within the budget.
+wait_for_local_port() {
+  local port="$1" attempts="${2:-15}" i=1
+  while ((i <= attempts)); do
+    if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/${port}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Interactively authenticate the daemon during install (devbox + UI + opt-in).
+# Shows a QR code for the Happier mobile app. Best-effort: a 5-minute timeout
+# skips, and Ctrl+C skips too — a local INT handler overrides the framework's
+# global abort trap (on_interrupt -> exit 130) so the install continues, then
+# restores it. Sets DAEMON_AUTH_DONE=1 on success.
+# Args: the CLI command + args to run as the happier user.
+run_daemon_auth_interactive() {
+  local auth_url saved_int_trap rc=0 interrupted=0
+  auth_url="$(resolve_daemon_auth_server_url)"
+
+  # Give the server a moment to bind before showing the QR (best-effort).
+  wait_for_local_port "${HAPPIER_SERVER_PORT}" 15 || true
+
+  echo ""
+  echo -e "${INFO}${YW} Authenticate your daemon now.${CL}"
+  echo -e "${TAB}A QR code will appear — scan it with the Happier mobile app."
+  echo -e "${TAB}The app needs to reach: ${BGN}${auth_url}${CL}"
+  echo -e "${TAB}Press Ctrl+C to skip and continue the install."
+  echo ""
+
+  saved_int_trap="$(trap -p INT)"
+  trap 'interrupted=1' INT
+  timeout 300 sudo -u happier -H "$@" </dev/null || rc=$?
+  if [[ -n "${saved_int_trap}" ]]; then eval "${saved_int_trap}"; else trap - INT; fi
+
+  if ((interrupted)); then
+    DAEMON_AUTH_DONE="0"
+    msg_warn "Daemon auth interrupted; skipping (you can do it later)."
+    return 1
+  fi
+  if [[ ${rc} -eq 0 ]]; then
+    DAEMON_AUTH_DONE="1"
+    msg_ok "Daemon authenticated"
+    return 0
+  fi
+
+  DAEMON_AUTH_DONE="0"
+  msg_warn "Daemon auth skipped (you can do it later)."
+  return 1
 }
 
 if [[ "${INSTALL_METHOD}" == "installers" ]]; then
@@ -709,6 +815,15 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   RELAY_SERVICE_NAME="$(channel_relay_service_name "${HAPPIER_CHANNEL}")"
   CLIENT_CLI_NAME="${HAPPIER_CLI_NAME}"
   HOSTED_WEBAPP_URL="$(channel_hosted_webapp_url "${HAPPIER_CHANNEL}")"
+
+  if [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]]; then
+    if run_daemon_auth_interactive "${HAPPIER_CLI_BIN}" auth login --method=mobile --no-open --start-if-needed; then
+      if [[ "${AUTOSTART}" == "1" ]]; then
+        systemctl restart "${RELAY_SERVICE_NAME}" >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
+
   if [[ "${SETUP_BIND}" == "loopback" ]]; then
     echo -e "${INFO}${YW} Access (HTTP, inside container): ${CL}${TAB}${GATEWAY}${BGN}http://127.0.0.1:${HAPPIER_SERVER_PORT}${CL}"
     echo -e "${INFO}${YW} Note:${CL} bind=loopback is not reachable from your LAN."
@@ -793,7 +908,9 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
 
   echo -e "${TAB}${YW}2)${CL} Sign in or create an account (recommended: mobile app)."
 
-  if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
+  if [[ "${INSTALL_TYPE}" == "devbox" && "${DAEMON_AUTH_DONE}" == "1" ]]; then
+    echo -e "${TAB}${YW}3)${CL} Daemon is authenticated and running."
+  elif [[ "${INSTALL_TYPE}" == "devbox" ]]; then
     echo -e "${TAB}${YW}3)${CL} Authenticate the daemon running in this container:"
     if [[ "${REMOTE_ACCESS}" == "tailscale" && -z "${TAILSCALE_HTTPS_URL}" ]]; then
       echo -e "${TAB}${TAB}${YW}Note:${CL} you selected Tailscale but no HTTPS URL was detected yet."
@@ -869,12 +986,22 @@ if [[ "${HAPPIER_CHANNEL}" == "preview" ]]; then
   SETUP_ARGS+=("--stable-branch=preview")
 fi
 
-msg_info "Installing Happier (hstack setup-from-source) — package: ${STACK_PACKAGE}"
+# Pin the install to a concrete version: resolve the channel dist-tag once so the
+# build is reproducible/logged and not subject to the tag moving mid-install.
+STACK_PACKAGE_RESOLVED="${STACK_PACKAGE}"
+if command -v npm >/dev/null 2>&1; then
+  _resolved_stack_version="$(npm view "${STACK_PACKAGE}" version 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
+  if [[ -n "${_resolved_stack_version}" ]]; then
+    STACK_PACKAGE_RESOLVED="@happier-dev/stack@${_resolved_stack_version}"
+  fi
+fi
+
+msg_info "Installing Happier (hstack setup-from-source) — package: ${STACK_PACKAGE_RESOLVED}"
 (
   # Avoid sudo inheriting an inaccessible cwd (e.g. /root) for the happier user.
   cd /home/happier || { msg_error "Failed to access /home/happier"; exit 1; }
   $STD sudo -u happier -H env "${SETUP_ENV[@]}" \
-    npx --yes -p "${STACK_PACKAGE}" hstack setup-from-source "${SETUP_ARGS[@]}" </dev/null
+    npx --yes -p "${STACK_PACKAGE_RESOLVED}" hstack setup-from-source "${SETUP_ARGS[@]}" </dev/null
 )
 msg_ok "Installed Happier (hstack setup-from-source)"
 
@@ -912,11 +1039,13 @@ HAPPIER_HOME="$(getent passwd happier | cut -d: -f6 | tr -d '\r' || true)"
 mkdir -p "$(dirname "$STACK_ENV_FILE")"
 touch "$STACK_ENV_FILE"
 chown happier:happier "$STACK_ENV_FILE"
+chmod 600 "$STACK_ENV_FILE"
 
 set_env_kv() {
   local file="$1" key="$2" value="$3"
   local escaped
-  escaped="$(printf '%s' "$value" | sed -e 's/[|&]/\\\\&/g')"
+  # Escape the sed replacement metacharacters: backslash, ampersand, and the '|' delimiter.
+  escaped="$(printf '%s' "$value" | sed -e 's/[\\&|]/\\&/g')"
   if grep -q "^${key}=" "$file"; then
     sed -i "s|^${key}=.*|${key}=${escaped}|" "$file"
   else
@@ -1020,15 +1149,10 @@ fi
 
 if [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
   msg_info "Installing Tailscale"
-  ID=$(grep "^ID=" /etc/os-release | cut -d"=" -f2)
-  VER=$(grep "^VERSION_CODENAME=" /etc/os-release | cut -d"=" -f2)
-  curl -fsSL "https://pkgs.tailscale.com/stable/${ID}/${VER}.noarmor.gpg" \
-    | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-  echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/${ID} ${VER} main" \
-    >/etc/apt/sources.list.d/tailscale.list
-  $STD apt-get update -qq
-  $STD apt-get install -y tailscale
-  systemctl enable -q --now tailscaled
+  if ! install_tailscale_pkg; then
+    msg_error "Tailscale installation failed. Check container network/DNS, then re-run."
+    exit 1
+  fi
   msg_ok "Installed Tailscale"
 
   # Pin the binary path to avoid shell/MOTD output polluting command-path resolution.
@@ -1182,6 +1306,14 @@ fi
 
 msg_ok "Install complete"
 
+if [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]]; then
+  if run_daemon_auth_interactive "${HSTACK_BIN}" auth login --method=mobile --no-open --start-if-needed; then
+    if [[ "${AUTOSTART}" == "1" ]]; then
+      systemctl restart "${STACK_LABEL}.service" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
 if [[ "${SETUP_BIND}" == "loopback" ]]; then
   echo -e "${INFO}${YW} Access (HTTP, inside container): ${CL}${TAB}${GATEWAY}${BGN}http://127.0.0.1:${HAPPIER_SERVER_PORT}${CL}"
   echo -e "${INFO}${YW} Note:${CL} bind=loopback is not reachable from your LAN."
@@ -1290,7 +1422,9 @@ if [[ "${REMOTE_ACCESS}" == "tailscale" && -z "${TAILSCALE_HTTPS_URL}" ]]; then
   echo -e "${TAB}${TAB}${TAB}${GATEWAY}${BGN}su - happier -c \"${HSTACK_BIN} auth login --method=mobile --no-open\"${CL}"
 fi
 
-if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
+if [[ "${INSTALL_TYPE}" == "devbox" && "${DAEMON_AUTH_DONE}" == "1" ]]; then
+  echo -e "${TAB}${YW}2)${CL} Daemon is authenticated and running."
+elif [[ "${INSTALL_TYPE}" == "devbox" ]]; then
   echo -e "${TAB}${YW}2)${CL} Connect the daemon running in this devbox (run inside the container):"
   echo -e "${TAB}${TAB}${GATEWAY}${BGN}sudo -u happier -H ${HSTACK_BIN} auth login --method=mobile --no-open${CL}"
   echo -e "${TAB}${YW}3)${CL} After login, restart the stack to start the daemon:"

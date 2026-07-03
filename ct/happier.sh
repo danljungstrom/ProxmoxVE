@@ -59,6 +59,12 @@ channel_suffix() {
   esac
 }
 
+channel_relay_service_name() {
+  local suffix=""
+  suffix="$(channel_suffix "$1")" || return 1
+  printf '%s' "happier-server${suffix}"
+}
+
 channel_config_env_path() {
   local suffix=""
   suffix="$(channel_suffix "$1")" || return 1
@@ -166,7 +172,12 @@ resolve_ui_extract_root() {
 resolve_installed_cli_for_channel() {
   local cli_name=""
   cli_name="$(channel_cli_name "$1")" || return 1
-  command -v "${cli_name}" 2>/dev/null || true
+  local candidate=""
+  candidate="$(command -v "${cli_name}" 2>/dev/null || true)"
+  if [[ -z "${candidate}" && -x "/opt/happier/cli/bin/${cli_name}" ]]; then
+    candidate="/opt/happier/cli/bin/${cli_name}"
+  fi
+  printf '%s' "${candidate}"
 }
 
 function update_script() {
@@ -186,6 +197,9 @@ untrusted comment: minisign public key 91AE28177BF6E43C
 RWQ85PZ7FyiukYbL3qv/bKnwgbT68wLVzotapeMFIb8n+c7pBQ7U8W2t
 EOF
 )}"
+    if [[ -n "${HAPPIER_MINISIGN_PUBKEY:-}" ]]; then
+      msg_warn "Using a NON-DEFAULT minisign signing key (HAPPIER_MINISIGN_PUBKEY) — UI bundle signature trust anchor overridden."
+    fi
     local temp_dir=""
     temp_dir="$(mktemp -d)"
     local release_json="${temp_dir}/release.json"
@@ -224,7 +238,7 @@ EOF
     sig_url="$(jq -r --arg name "${checksums_name}.minisig" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}" | head -n 1)"
     archive_url="$(jq -r --arg name "${archive_name}" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}" | head -n 1)"
     [[ -z "${checksums_url}" || -z "${sig_url}" || -z "${archive_url}" ]] && {
-      msg_error "Unable to resolve Happier UI bundle assets."
+      msg_error "Unable to resolve Happier UI bundle assets for version ${version}."
       rm -rf "${temp_dir}"
       exit 1
     }
@@ -270,11 +284,16 @@ EOF
       exit 1
     fi
 
+    # Stage into a temp dir and swap atomically so a failed copy leaves the
+    # previously-installed bundle intact (no dangling/partial current symlink).
     local version_dir="${ui_versions_dir}/happier-ui-web-${version}"
+    local staging_dir="${version_dir}.tmp.$$"
     mkdir -p "${ui_versions_dir}"
+    rm -rf "${staging_dir}"
+    mkdir -p "${staging_dir}"
+    cp -a "${artifact_root}/." "${staging_dir}/"
     rm -rf "${version_dir}"
-    mkdir -p "${version_dir}"
-    cp -a "${artifact_root}/." "${version_dir}/"
+    mv "${staging_dir}" "${version_dir}"
     ln -sfn "${version_dir}" "${ui_current_dir}"
     rm -rf "${temp_dir}"
   }
@@ -313,7 +332,7 @@ EOF
 
     msg_info "Updating ${APP} relay host (channel: ${installer_channel})"
     "${cli_bin}" relay host install --mode system --channel "${installer_channel}"
-    systemctl restart 'happier-daemon.*.service' >/dev/null 2>&1 || true
+    systemctl restart "$(channel_relay_service_name "${installer_channel}")" >/dev/null 2>&1 || true
     msg_ok "Updated ${APP}"
     exit
   fi
@@ -395,6 +414,7 @@ function app_questions() {
   HAPPIER_PVE_REMOTE_ACCESS="none"
   HAPPIER_PVE_TAILSCALE_AUTHKEY=""
   HAPPIER_PVE_PUBLIC_URL=""
+  HAPPIER_PVE_DAEMON_AUTH="0"
   HAPPIER_PVE_CHANNEL="${HAPPIER_PVE_CHANNEL:-${HAPPIER_PVE_HSTACK_CHANNEL:-stable}}"
   HAPPIER_PVE_STACK_PACKAGE="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}"
 
@@ -463,6 +483,17 @@ function app_questions() {
     fi
   done
 
+  # Offer to authenticate the daemon interactively during install (devbox + UI only).
+  # When enabled, the installer shows a QR code (hstack auth login) at the end of setup.
+  if [[ "$HAPPIER_PVE_INSTALL_TYPE" == "devbox" && "$HAPPIER_PVE_SERVE_UI" == "1" ]]; then
+    if (whiptail --backtitle "$BACKTITLE" --title "DAEMON AUTH" --yesno \
+      "\nAuthenticate the daemon during install?\n\nAfter setup completes, a QR code will appear.\nScan it with the Happier mobile app to authenticate the daemon.\n\nSelect No to skip and authenticate manually later.\n" 15 72); then
+      HAPPIER_PVE_DAEMON_AUTH="1"
+    else
+      HAPPIER_PVE_DAEMON_AUTH="0"
+    fi
+  fi
+
   HAPPIER_PVE_CHANNEL=$(
     whiptail --backtitle "$BACKTITLE" --title "HAPPIER RELEASE CHANNEL" --radiolist \
       "\nChoose a release channel:\n\n- stable: recommended for production\n- preview: pre-release (newer, less tested)\n- dev: rolling/unstable; there is no hosted web UI unless you serve the UI locally\n" 20 72 3 \
@@ -486,6 +517,7 @@ function app_questions() {
   export HAPPIER_PVE_REMOTE_ACCESS
   export HAPPIER_PVE_TAILSCALE_AUTHKEY
   export HAPPIER_PVE_PUBLIC_URL
+  export HAPPIER_PVE_DAEMON_AUTH
   export HAPPIER_PVE_CHANNEL
   export HAPPIER_PVE_STACK_PACKAGE
   export HAPPIER_PVE_HSTACK_CHANNEL="${HAPPIER_PVE_CHANNEL}"
