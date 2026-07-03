@@ -223,7 +223,7 @@ install_managed_ui_bundle() {
   local release_json="${temp_dir}/release.json"
   local checksums_path="${temp_dir}/checksums-happier-ui-web.txt"
   local sig_path="${checksums_path}.minisig"
-  local archive_path="${temp_dir}/happier-ui-web.tar.gz"
+  local archive_path="" # assigned once the release asset name is known
   local pubkey_path="${temp_dir}/minisign.pub"
 
   if ! command -v minisign >/dev/null 2>&1; then
@@ -253,6 +253,10 @@ install_managed_ui_bundle() {
   local version="${checksums_name#checksums-happier-ui-web-v}"
   version="${version%.txt}"
   local archive_name="happier-ui-web-v${version}-web-any.tar.gz"
+  # The archive MUST be saved under its release-asset name: the checksums file
+  # references that name and `sha256sum -c` opens the file it names — a different
+  # local filename makes verification fail with "No such file or directory".
+  archive_path="${temp_dir}/${archive_name}"
   local checksums_url=""
   local sig_url=""
   local archive_url=""
