@@ -477,13 +477,16 @@ print_next_steps() {
 # and threads them through to ct/happier.sh, so a pinned install updates from the
 # SAME ref instead of silently jumping to main. To pin: `INSTALLER_REF=<tag> update`.
 write_update_helper() {
-  cat >/usr/bin/update <<'UPDATEEOF'
+  # The install-time INSTALLER_REPO/REF are baked in as the DEFAULTS (env still
+  # overrides at update time) — otherwise a pinned install silently updates from
+  # the moving main branch, contradicting the documented pinning contract.
+  cat >/usr/bin/update <<UPDATEEOF
 #!/usr/bin/env bash
 set -euo pipefail
-REPO="${INSTALLER_REPO:-happier-dev/ProxmoxVE}"
-REF="${INSTALLER_REF:-main}"
-curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/ct/happier.sh" \
-  | INSTALLER_REPO="${REPO}" INSTALLER_REF="${REF}" bash
+REPO="\${INSTALLER_REPO:-${INSTALLER_REPO:-happier-dev/ProxmoxVE}}"
+REF="\${INSTALLER_REF:-${INSTALLER_REF:-main}}"
+curl -fsSL "https://raw.githubusercontent.com/\${REPO}/\${REF}/ct/happier.sh" \\
+  | INSTALLER_REPO="\${REPO}" INSTALLER_REF="\${REF}" bash
 UPDATEEOF
   chmod +x /usr/bin/update
 }
@@ -727,6 +730,10 @@ install_managed_relay_runtime() {
 
   msg_info "Installing Happier relay host"
   $STD "${HAPPIER_CLI_BIN}" "${relay_args[@]}" </dev/null
+  # Kept for ensure_relay_host_installed: the CLI's daemon `service install` has
+  # been observed to remove the relay unit during its reconciliation on fresh
+  # installs, and reinstalling needs the exact same argument set.
+  RELAY_INSTALL_ARGS=("${relay_args[@]}")
   msg_ok "Installed Happier relay host"
 
   if [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
@@ -815,6 +822,21 @@ install_devbox_background_service() {
     fi
   fi
   msg_ok "Background service installed"
+}
+
+# The CLI's daemon `service install` has been observed to remove/absorb the
+# relay unit during reconciliation on fresh installs (vendor behavior varies by
+# version). Reinstall the relay with the exact original arguments if its unit
+# vanished; idempotent when everything is fine.
+ensure_relay_host_installed() {
+  local relay_unit=""
+  relay_unit="$(channel_relay_service_name "${HAPPIER_CHANNEL}")"
+  if systemctl list-unit-files --no-legend "${relay_unit}.service" 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  msg_warn "Relay unit ${relay_unit} missing after daemon service install; reinstalling the relay host."
+  $STD "${HAPPIER_CLI_BIN}" "${RELAY_INSTALL_ARGS[@]}" </dev/null || true
+  restart_happier_unit "${relay_unit}"
 }
 
 # Install the agent CLIs the daemon drives.
@@ -1017,6 +1039,7 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
 
     if [[ "${AUTOSTART}" == "1" ]]; then
       install_devbox_background_service
+      ensure_relay_host_installed
     else
       msg_info "Autostart disabled: skipping background service install"
       msg_ok "Background service skipped"
