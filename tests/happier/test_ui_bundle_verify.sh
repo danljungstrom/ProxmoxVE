@@ -88,6 +88,17 @@ drop_fake_minisign() {
   hash -r
 }
 
+# D11: hermetic minisign-hiding. With _hide_minisign=1 the command override reports
+# minisign as absent, so the missing-binary branch runs even in CI where real
+# minisign is installed. Top-level def (invoked indirectly), so not flagged SC2329.
+_hide_minisign=0
+command() {
+  if [[ "${_hide_minisign}" -eq 1 && "${1:-}" == "-v" && "${2:-}" == "minisign" ]]; then
+    return 1
+  fi
+  builtin command "$@"
+}
+
 # --- stub-minisign tier --------------------------------------------------------
 
 test_install_happy_path_and_same_version_refresh() {
@@ -199,14 +210,13 @@ test_missing_archive_asset_fails() {
 
 test_missing_minisign_binary_fails() {
   make_fixtures
-  drop_fake_minisign
-  if command -v minisign >/dev/null 2>&1; then
-    skip "real minisign installed; the missing-binary branch is untestable here"
-    return
-  fi
-  if install_managed_ui_bundle stable refresh >/dev/null 2>&1; then
-    fail "refresh succeeded without any minisign binary"
-  fi
+  # D11: hide minisign hermetically so this runs everywhere (was skipped when a
+  # real minisign was on PATH).
+  _hide_minisign=1
+  local rc=0
+  install_managed_ui_bundle stable refresh >/dev/null 2>&1 || rc=$?
+  _hide_minisign=0
+  assert_eq "${rc}" "1" "refresh degrades (rc 1) when no minisign binary is present"
 }
 
 # --- real-crypto tier -----------------------------------------------------------
