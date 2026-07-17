@@ -1185,22 +1185,22 @@ msg_info "Installing Happier (hstack setup-from-source) — package: ${STACK_PAC
 msg_ok "Installed Happier (hstack setup-from-source)"
 
 # Resolve actual hstack binary and paths. Some setups may not use the default stack/workdir.
-HSTACK_BIN="/home/happier/.happier-stack/bin/hstack"
+HSTACK_BIN="${HAPPIER_STACK_DEFAULT_BIN}"
 if [[ ! -x "${HSTACK_BIN}" ]]; then
-  HSTACK_BIN="$(sudo -u happier -H bash -lc 'command -v hstack || true' | tr -d '\r')"
+  # A10: keep only the first path-shaped line so login-shell/MOTD stdout noise from
+  # `bash -lc` cannot pollute the capture and trigger a false "not found" abort.
+  HSTACK_BIN="$(sudo -u happier -H bash -lc 'command -v hstack 2>/dev/null' 2>/dev/null | tr -d '\r' | grep -m1 '^/' || true)"
 fi
 if [[ -z "${HSTACK_BIN}" || ! -x "${HSTACK_BIN}" ]]; then
   msg_error "hstack binary not found after setup."
   exit 1
 fi
 
-HSTACK_HOME_DIR="/home/happier/.happier-stack"
-STACK_NAME="main"
-STACK_LABEL="dev.happier.stack"
-STACK_ENV_FILE="/home/happier/.happier/stacks/${STACK_NAME}/env"
+HSTACK_HOME_DIR="${HAPPIER_STACK_DEFAULT_HOME}"
+STACK_LABEL="${HAPPIER_STACK_DEFAULT_LABEL}"
+STACK_ENV_FILE="${HAPPIER_STACK_DEFAULT_ENV}"
 resolve_hstack_layout "${HSTACK_BIN}"
 [[ -n "${HSTACK_WHERE_HOME}" ]] && HSTACK_HOME_DIR="${HSTACK_WHERE_HOME}"
-[[ -n "${HSTACK_WHERE_NAME}" ]] && STACK_NAME="${HSTACK_WHERE_NAME}"
 [[ -n "${HSTACK_WHERE_LABEL}" ]] && STACK_LABEL="${HSTACK_WHERE_LABEL}"
 [[ -n "${HSTACK_WHERE_ENV}" ]] && STACK_ENV_FILE="${HSTACK_WHERE_ENV}"
 if [[ ! -f "${STACK_ENV_FILE}" ]]; then

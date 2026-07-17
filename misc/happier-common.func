@@ -133,6 +133,18 @@ channel_default_stack_package() {
   printf '%s' "${pkg}"
 }
 
+# Default happier-stack (from_source) layout. resolve_hstack_layout reports the
+# live values into HSTACK_WHERE_*; callers fall back to these when a field is
+# empty. Single source so ct/happier.sh (legacy update) and the installer agree.
+# shellcheck disable=SC2034 # consumed by the sourcing scripts (ct/happier.sh, install)
+HAPPIER_STACK_DEFAULT_BIN="/home/happier/.happier-stack/bin/hstack"
+# shellcheck disable=SC2034
+HAPPIER_STACK_DEFAULT_HOME="/home/happier/.happier-stack"
+# shellcheck disable=SC2034
+HAPPIER_STACK_DEFAULT_LABEL="dev.happier.stack"
+# shellcheck disable=SC2034
+HAPPIER_STACK_DEFAULT_ENV="/home/happier/.happier/stacks/main/env"
+
 # Resolve the hstack layout via `hstack where --json` (run as the happier user).
 # Sets HSTACK_WHERE_HOME/_NAME/_LABEL/_ENV/_WORKSPACE ("" when undetected) —
 # callers apply their own defaults for empty fields. Requires jq; without it (or

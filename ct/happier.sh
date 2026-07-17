@@ -161,11 +161,11 @@ function update_script() {
   fi
 
   # Legacy from-source stack install
-  if [[ -x /home/happier/.happier-stack/bin/hstack ]]; then
-    local hstack_bin="/home/happier/.happier-stack/bin/hstack"
-    local stack_home="/home/happier/.happier-stack"
-    local stack_env="/home/happier/.happier/stacks/main/env"
-    local stack_label="dev.happier.stack"
+  if [[ -x "${HAPPIER_STACK_DEFAULT_BIN}" ]]; then
+    local hstack_bin="${HAPPIER_STACK_DEFAULT_BIN}"
+    local stack_home="${HAPPIER_STACK_DEFAULT_HOME}"
+    local stack_env="${HAPPIER_STACK_DEFAULT_ENV}"
+    local stack_label="${HAPPIER_STACK_DEFAULT_LABEL}"
     local workspace_dir=""
 
     resolve_hstack_layout "${hstack_bin}"
