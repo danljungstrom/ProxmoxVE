@@ -19,6 +19,7 @@ on:
       - "misc/core.func"
       - "misc/install.func"
       - "json/happier.json"
+      - "frontend/public/json/happier.json"
       - "tests/happier/**"
       - ".github/workflows/happier-lint.yml"
   push:
@@ -31,6 +32,7 @@ on:
       - "misc/core.func"
       - "misc/install.func"
       - "json/happier.json"
+      - "frontend/public/json/happier.json"
       - "tests/happier/**"
       - ".github/workflows/happier-lint.yml"
 
@@ -53,7 +55,7 @@ jobs:
       SHFMT_VERSION: "v3.13.1"
       SHFMT_SHA256: "fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: bash -n (syntax) — scripts + patched func files + tests
         run: |
@@ -96,6 +98,17 @@ jobs:
           # minisign enables the real-crypto tier of the UI-bundle verify tests.
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign
           bash tests/happier/run.sh
+
+      - name: json twins byte-identical (json/ vs frontend/public/json/)
+        run: |
+          # The installer JSON is duplicated for the frontend; they must stay
+          # byte-identical. CI now also triggers on the frontend copy (see paths).
+          if ! cmp -s json/happier.json frontend/public/json/happier.json; then
+            echo "json/happier.json and frontend/public/json/happier.json differ — keep them byte-identical:"
+            diff -u json/happier.json frontend/public/json/happier.json || true
+            exit 1
+          fi
+          echo "json twins in sync"
 
       - name: validate json/happier.json (parse + installer contract)
         run: |
