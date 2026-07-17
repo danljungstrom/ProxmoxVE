@@ -181,7 +181,10 @@ retry_until() {
     if "$@"; then
       return 0
     fi
-    sleep "${sleep_s}"
+    # Don't sleep after the final attempt — the caller bails immediately after.
+    if ((i < attempts)); then
+      sleep "${sleep_s}"
+    fi
     i=$((i + 1))
   done
   return 1
@@ -199,7 +202,10 @@ resolve_tailscale_https_url_with_retries() {
       printf '%s' "${detected}"
       return 0
     fi
-    sleep "${sleep_s}"
+    # Don't sleep after the final attempt.
+    if ((i < attempts)); then
+      sleep "${sleep_s}"
+    fi
     i=$((i + 1))
   done
   return 1
@@ -1089,6 +1095,12 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   print_access_urls
   if [[ -z "${TAILSCALE_HTTPS_URL}" && "${REMOTE_ACCESS}" == "tailscale" ]]; then
     echo -e "${INFO}${YW} Tailscale:${CL} enroll it inside the container, then enable Serve:"
+    # Surface the login URL the shared enroller captured (the from_source epilogue
+    # already does this); resolve it lazily if enrollment never populated it.
+    [[ -z "${TAILSCALE_AUTH_URL}" ]] && TAILSCALE_AUTH_URL="$(tailscale_status_json_field AuthURL)"
+    if [[ -n "${TAILSCALE_AUTH_URL}" ]]; then
+      echo -e "${TAB}${YW}Login URL:${CL} ${TAILSCALE_AUTH_URL}"
+    fi
     echo -e "${TAB}${GATEWAY}${BGN}tailscale up${CL}"
     echo -e "${TAB}${GATEWAY}${BGN}tailscale set --operator=happier${CL}"
     echo -e "${TAB}${GATEWAY}${BGN}tailscale serve --bg http://127.0.0.1:${HAPPIER_SERVER_PORT}${CL}"

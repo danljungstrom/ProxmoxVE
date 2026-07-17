@@ -320,9 +320,9 @@ function app_questions() {
         "\nProvide a Tailscale pre-auth key now?\n\nRecommended: use an ephemeral, one-time key.\n\nIf you skip this, the installer will still install Tailscale and you can run 'tailscale up' later inside the container.\n" 14 72); then
         HAPPIER_PVE_TAILSCALE_AUTHKEY=$(
           whiptail --backtitle "${BACKTITLE}" --title "TAILSCALE" --passwordbox \
-            "\nPaste your Tailscale pre-auth key (optional; will not be saved).\n\nTip: leave blank to skip and enroll manually later.\n" 14 72 \
+            "\nPaste your Tailscale pre-auth key (optional; will not be saved).\n\nTip: leave blank or press Cancel to skip and enroll manually later.\n" 14 72 \
             3>&1 1>&2 2>&3
-        ) || exit_script
+        ) || HAPPIER_PVE_TAILSCALE_AUTHKEY=""
       fi
       break
     fi
