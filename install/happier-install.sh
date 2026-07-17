@@ -80,6 +80,11 @@ INSTALL_AGENTS="${HAPPIER_PVE_INSTALL_AGENTS:-1}"                               
 DAEMON_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"                                     # optional daemon GITHUB_PERSONAL_ACCESS_TOKEN
 AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"                                         # 1 | 0 (enable managed auto-update timer)
 AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"                               # HH:MM for the auto-update timer
+# Secrets hygiene: the PAT and Tailscale key now live in locals. Drop the exported
+# copies so they are NOT inherited by the third-party root children spawned later
+# (happier.dev bootstrap, NodeSource, `npm install -g` lifecycle scripts — the
+# classic supply-chain exfil target). sudo children are already env_reset-protected.
+unset HAPPIER_PVE_GITHUB_PAT HAPPIER_PVE_TAILSCALE_AUTHKEY
 is_valid_hhmm() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
 if [[ "${AUTO_UPDATE}" == "1" ]] && ! is_valid_hhmm "${AUTO_UPDATE_AT}"; then
   msg_warn "Invalid HAPPIER_PVE_AUTO_UPDATE_AT='${AUTO_UPDATE_AT}', falling back to 04:00"
@@ -895,8 +900,12 @@ install_devbox_agents() {
     msg_warn "npm not available; skipping codex install"
     return 0
   fi
-  msg_info "Installing codex (npm)"
-  if $STD npm install -g @openai/codex; then
+  # Pin the codex version. An unpinned `npm install -g` pulls whatever is latest and
+  # runs its lifecycle scripts as root (supply-chain exposure); pin and bump this
+  # deliberately after vetting a release.
+  local codex_pkg="@openai/codex@0.144.5"
+  msg_info "Installing codex (npm, ${codex_pkg})"
+  if $STD npm install -g "${codex_pkg}"; then
     msg_ok "Installed codex"
   else
     msg_warn "codex install failed (non-fatal) — install it manually and re-run update"
