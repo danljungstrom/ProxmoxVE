@@ -485,8 +485,19 @@ write_update_helper() {
 set -euo pipefail
 REPO="\${INSTALLER_REPO:-${INSTALLER_REPO:-happier-dev/ProxmoxVE}}"
 REF="\${INSTALLER_REF:-${INSTALLER_REF:-main}}"
-curl -fsSL "https://raw.githubusercontent.com/\${REPO}/\${REF}/ct/happier.sh" \\
-  | INSTALLER_REPO="\${REPO}" INSTALLER_REF="\${REF}" bash
+# Inherit any configured HTTP(S) proxy so \`update\` works on proxied networks
+# (customize() sources this for its own update helper; keep parity here).
+set -a
+[ -f /etc/profile.d/90-http-proxy.sh ] && . /etc/profile.d/90-http-proxy.sh
+set +a
+# Download to a temp file with retries/timeouts, then run it — instead of piping
+# \`curl | bash\`, which has no timeout and can execute a truncated script if the
+# transfer drops mid-stream.
+script="\$(mktemp)"
+trap 'rm -f "\${script}"' EXIT
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 \\
+  "https://raw.githubusercontent.com/\${REPO}/\${REF}/ct/happier.sh" -o "\${script}"
+INSTALLER_REPO="\${REPO}" INSTALLER_REF="\${REF}" bash "\${script}"
 UPDATEEOF
   chmod +x /usr/bin/update
 }
