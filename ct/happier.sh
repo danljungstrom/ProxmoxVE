@@ -416,8 +416,8 @@ function app_questions() {
     esac
     HAPPIER_PVE_CHANNEL=$(
       whiptail --backtitle "${BACKTITLE}" --title "HAPPIER RELEASE CHANNEL" --radiolist \
-        "\nChoose a release channel:\n\n- stable: recommended for production\n- preview: pre-release (newer, less tested)\n- dev: rolling/unstable; there is no hosted web UI unless you serve the UI locally\n" 20 72 3 \
-        "stable" "Stable (recommended)" "${_ch_stable}" \
+        "\nChoose a release channel:\n\n- stable: production channel (NOTE: the hosted stable build has recently been failing fresh system installs — last checked 2026-07-17; prefer preview/dev or verify first)\n- preview: pre-release (newer, less tested)\n- dev: rolling/unstable; there is no hosted web UI unless you serve the UI locally\n" 20 72 3 \
+        "stable" "Stable (see note)" "${_ch_stable}" \
         "preview" "Preview / pre-release" "${_ch_preview}" \
         "dev" "Dev / unstable" "${_ch_dev}" \
         3>&1 1>&2 2>&3

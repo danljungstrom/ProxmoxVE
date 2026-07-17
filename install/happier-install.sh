@@ -613,6 +613,13 @@ HAPPIER_CHANNEL="$(normalize_happier_channel "${HAPPIER_CHANNEL_RAW}")" || {
   msg_error "Invalid HAPPIER release channel: ${HAPPIER_CHANNEL_RAW}. Use stable | preview | dev."
   exit 1
 }
+# G1: the hosted stable build has been failing fresh system-mode installs (relay
+# runtime never healthy) — re-confirmed on the 2026-07-17 LXC matrix. Warn on
+# preset/unattended stable installs too (they skip the channel prompt's note).
+# Remove this once the vendor stable channel serves a working build again.
+if [[ "${HAPPIER_CHANNEL}" == "stable" ]]; then
+  msg_warn "Release channel 'stable': the hosted stable build has recently been failing fresh installs (relay runtime not healthy). If the relay install fails, retry with HAPPIER_PVE_CHANNEL=preview or dev."
+fi
 STACK_PACKAGE="$(printf '%s' "${STACK_PACKAGE_RAW}" | tr -d '\r' | xargs)"
 STACK_PACKAGE="$(channel_default_stack_package "${HAPPIER_CHANNEL}" "${STACK_PACKAGE}")"
 if [[ -z "${STACK_PACKAGE}" ]]; then
