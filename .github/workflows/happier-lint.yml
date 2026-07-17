@@ -65,18 +65,37 @@ jobs:
           done
           exit $rc
 
+      # P4: cache the pinned binaries keyed on their versions so they are not
+      # re-downloaded every run (~15-25s saved on a cache hit). Sha256 is still
+      # verified on the download path (cache miss). Bumping *_VERSION changes the
+      # key, forcing a fresh verified download.
+      - name: cache pinned shellcheck + shfmt
+        id: lint-tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.happier-lint-tools
+          key: happier-lint-tools-${{ env.SHELLCHECK_VERSION }}-${{ env.SHFMT_VERSION }}
+
       - name: install pinned shellcheck + shfmt (sha256-verified)
+        if: steps.lint-tools.outputs.cache-hit != 'true'
         run: |
+          mkdir -p "$HOME/.happier-lint-tools"
           curl -fsSL --retry 3 -o /tmp/sc.tar.xz \
             "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           echo "${SHELLCHECK_SHA256}  /tmp/sc.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sc.tar.xz -C /tmp
-          sudo mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" "$HOME/.happier-lint-tools/shellcheck"
           curl -fsSL --retry 3 -o /tmp/shfmt \
             "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64"
           echo "${SHFMT_SHA256}  /tmp/shfmt" | sha256sum -c -
-          chmod +x /tmp/shfmt && sudo mv /tmp/shfmt /usr/local/bin/shfmt
-          shellcheck --version && shfmt --version
+          chmod +x /tmp/shfmt && mv /tmp/shfmt "$HOME/.happier-lint-tools/shfmt"
+          chmod +x "$HOME/.happier-lint-tools/shellcheck"
+
+      - name: put pinned tools on PATH
+        run: |
+          echo "$HOME/.happier-lint-tools" >>"$GITHUB_PATH"
+          "$HOME/.happier-lint-tools/shellcheck" --version
+          "$HOME/.happier-lint-tools/shfmt" --version
 
       - name: shellcheck (fork-owned files, no excludes)
         run: |

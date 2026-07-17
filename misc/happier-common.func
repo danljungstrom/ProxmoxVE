@@ -85,6 +85,22 @@ channel_state_path() {
   printf '%s' "/opt/happier${suffix}/self-host-state.json"
 }
 
+# Detect the installed channel by which channel's self-host-state.json exists, in
+# priority order stable > preview > dev. Prints the channel and returns 0; prints
+# nothing and returns 1 when none is present. Drives the update path's channel
+# selection (extracted from update_script so the priority is unit-testable).
+detect_installed_channel() {
+  local candidate="" state=""
+  for candidate in stable preview dev; do
+    state="$(channel_state_path "${candidate}")" || continue
+    if [[ -f "${state}" ]]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 channel_ui_current_dir() {
   printf '%s' "$(channel_data_dir "$1")/ui-web/current"
 }

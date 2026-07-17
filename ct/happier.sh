@@ -74,15 +74,7 @@ function update_script() {
   check_container_resources
 
   local installer_channel=""
-  local installer_state_path=""
-  local candidate_channel=""
-  for candidate_channel in stable preview dev; do
-    installer_state_path="$(channel_state_path "${candidate_channel}")"
-    if [[ -f "${installer_state_path}" ]]; then
-      installer_channel="${candidate_channel}"
-      break
-    fi
-  done
+  installer_channel="$(detect_installed_channel || true)"
 
   if [[ -n "${installer_channel}" ]]; then
     local cli_bin=""
