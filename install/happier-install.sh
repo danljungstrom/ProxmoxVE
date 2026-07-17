@@ -706,7 +706,12 @@ install_managed_relay_runtime() {
     # Capability probe: released CLIs may not know the auto-update flags yet
     # (`relay host install` rejects unknown arguments). Degrade with a warning
     # instead of failing the whole install.
-    if "${HAPPIER_CLI_BIN}" relay host install --help 2>&1 | grep -q -- '--auto-update'; then
+    # Capture help text first, then grep a here-string. Piping the CLI directly
+    # into `grep -q` lets grep's early SIGPIPE close (or a non-zero CLI exit) flip
+    # the result under `set -o pipefail`, silently disabling the user's opt-in.
+    local auto_update_help=""
+    auto_update_help="$("${HAPPIER_CLI_BIN}" relay host install --help 2>&1 || true)"
+    if grep -q -- '--auto-update' <<<"${auto_update_help}"; then
       relay_args+=(--auto-update --auto-update-at="${AUTO_UPDATE_AT}")
     else
       msg_warn "This Happier CLI version does not support --auto-update yet; skipping the auto-update timer (update manually or re-run update after a CLI upgrade)."
@@ -835,7 +840,12 @@ ensure_relay_host_installed() {
     return 0
   fi
   msg_warn "Relay unit ${relay_unit} missing after daemon service install; reinstalling the relay host."
-  $STD "${HAPPIER_CLI_BIN}" "${RELAY_INSTALL_ARGS[@]}" </dev/null || true
+  local reinstall_rc=0
+  $STD "${HAPPIER_CLI_BIN}" "${RELAY_INSTALL_ARGS[@]}" </dev/null || reinstall_rc=$?
+  if ! systemctl list-unit-files --no-legend "${relay_unit}.service" 2>/dev/null | grep -q .; then
+    msg_error "Relay unit ${relay_unit} still missing after reinstall (rc=${reinstall_rc}); the Happier relay is not installed."
+    exit 1
+  fi
   restart_happier_unit "${relay_unit}"
 }
 

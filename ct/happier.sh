@@ -117,13 +117,34 @@ function update_script() {
       msg_warn "CLI self-update failed (rc=${self_update_rc}); continuing with the existing CLI"
     fi
 
+    local relay_service=""
+    relay_service="$(channel_relay_service_name "${installer_channel}")"
+    # Preserve the user's autostart choice: an install with autostart disabled
+    # leaves the relay unit present but disabled+inactive, and the reinstall below
+    # can re-enable it. Capture the prior state and restore it afterward.
+    local relay_was_enabled=1 relay_was_active=1
+    systemctl is-enabled --quiet "${relay_service}" 2>/dev/null || relay_was_enabled=0
+    systemctl is-active --quiet "${relay_service}" 2>/dev/null || relay_was_active=0
+
     msg_info "Updating ${APP} relay host (channel: ${installer_channel})"
     local relay_install_args=(relay host install --mode system --channel "${installer_channel}")
-    if systemctl is-active --quiet "$(channel_relay_service_name "${installer_channel}")-updater.timer" 2>/dev/null; then
+    if systemctl is-active --quiet "${relay_service}-updater.timer" 2>/dev/null; then
       relay_install_args+=(--auto-update)
     fi
-    "${cli_bin}" "${relay_install_args[@]}"
-    restart_happier_unit "$(channel_relay_service_name "${installer_channel}")"
+    # Guard the reinstall: it runs under the ERR trap between the CLI self-update
+    # and the daemon restart, so an unguarded failure would abort the update with
+    # the daemon still on the old CLI. Warn and continue instead.
+    local relay_install_rc=0
+    "${cli_bin}" "${relay_install_args[@]}" || relay_install_rc=$?
+    if [[ "${relay_install_rc}" -ne 0 ]]; then
+      msg_warn "Relay host reinstall failed (rc=${relay_install_rc}); continuing with the existing relay unit"
+    fi
+    # Restore the captured autostart state, then restart only if it was running.
+    if [[ "${relay_was_enabled}" -eq 0 ]]; then
+      systemctl disable -q --now "${relay_service}" >/dev/null 2>&1 || true
+    elif [[ "${relay_was_active}" -eq 1 ]]; then
+      restart_happier_unit "${relay_service}"
+    fi
     # Devbox: the relay restart above does not cycle the daemon, so a CLI self-update
     # leaves the running daemon on the old CLI. Restart it (no-op for server_only).
     if "${cli_bin}" daemon status >/dev/null 2>&1; then
