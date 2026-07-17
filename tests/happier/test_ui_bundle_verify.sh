@@ -51,16 +51,29 @@ download_file() { # url dest retries verbose — copy from the fixture dir by ba
   cp "${FIXTURE_DIR}/$(basename "$1")" "$2" 2>/dev/null
 }
 
-make_fixtures() { # rebuilds a pristine fixture set
-  rm -rf "${FIXTURE_DIR}" "${DATA_DIR}"
-  mkdir -p "${FIXTURE_DIR}" "${DATA_DIR}"
-  local staging="${SANDBOX}/bundle"
+# (Re)build the remote release fixture for one version, leaving any already-
+# installed bundle under DATA_DIR intact (so a test can install one version then
+# serve a different one for a refresh). Retargets the ARCHIVE_NAME/CHECKSUMS_NAME
+# globals the release-JSON stub advertises.
+build_release_fixture() { # version
+  VERSION="$1"
+  ARCHIVE_NAME="happier-ui-web-v${VERSION}-web-any.tar.gz"
+  CHECKSUMS_NAME="checksums-happier-ui-web-v${VERSION}.txt"
+  rm -rf "${FIXTURE_DIR}"
+  mkdir -p "${FIXTURE_DIR}"
+  local staging="${SANDBOX}/bundle-${VERSION}"
   rm -rf "${staging}"
   mkdir -p "${staging}"
   echo "<html>ui v${VERSION}</html>" >"${staging}/index.html"
   tar -czf "${FIXTURE_DIR}/${ARCHIVE_NAME}" -C "${staging}" index.html
   (cd "${FIXTURE_DIR}" && sha256sum "${ARCHIVE_NAME}" >"${CHECKSUMS_NAME}")
   echo "placeholder-signature" >"${FIXTURE_DIR}/${CHECKSUMS_NAME}.minisig"
+}
+
+make_fixtures() { # rebuilds a pristine fixture set + empty install dir (version 9.9.9)
+  rm -rf "${FIXTURE_DIR}" "${DATA_DIR}"
+  mkdir -p "${FIXTURE_DIR}" "${DATA_DIR}"
+  build_release_fixture "9.9.9"
 }
 
 use_fake_minisign() { # $1 = exit code the fake should return
@@ -87,16 +100,66 @@ test_install_happy_path_and_same_version_refresh() {
   }
   assert_eq "${out}" "$(channel_ui_current_dir stable)" "prints ui current dir"
   assert_ok "current symlink resolves" test -f "$(channel_ui_current_dir stable)/index.html"
-  # Same-version refresh: the A6 regression case — the live version dir is replaced,
-  # the symlink must still resolve afterwards and no .old.* debris may remain.
+  # Same-version refresh now short-circuits (P1): no re-download, the symlink must
+  # still resolve and no .old.*/.tmp.* debris may be left behind.
   out="$(install_managed_ui_bundle stable refresh)" || {
     fail "same-version refresh failed"
     return
   }
   assert_ok "symlink still resolves after refresh" test -f "$(channel_ui_current_dir stable)/index.html"
   local debris=""
-  debris="$(find "$(channel_data_dir stable)/ui-web/versions" -maxdepth 1 -name '*.old.*' 2>/dev/null)"
-  assert_eq "${debris}" "" "no .old.* debris left behind"
+  debris="$(find "$(channel_data_dir stable)/ui-web/versions" -maxdepth 1 \( -name '*.old.*' -o -name '*.tmp.*' \) 2>/dev/null)"
+  assert_eq "${debris}" "" "no .old.*/.tmp.* debris left behind"
+}
+
+test_refresh_newer_version_swaps() { # A6/A7: swap the live bundle to a newer version
+  make_fixtures
+  use_fake_minisign 0
+  install_managed_ui_bundle stable install >/dev/null || {
+    fail "install 9.9.9 failed"
+    return
+  }
+  build_release_fixture "9.9.10" # remote now serves a newer bundle
+  install_managed_ui_bundle stable refresh >/dev/null || {
+    fail "refresh to 9.9.10 failed"
+    return
+  }
+  assert_ok "current resolves after upgrade" test -f "$(channel_ui_current_dir stable)/index.html"
+  assert_eq "$(cat "$(channel_ui_current_dir stable)/index.html")" "<html>ui v9.9.10</html>" "current serves the upgraded version"
+  local debris=""
+  debris="$(find "$(channel_data_dir stable)/ui-web/versions" -maxdepth 1 \( -name '*.old.*' -o -name '*.tmp.*' \) 2>/dev/null)"
+  assert_eq "${debris}" "" "no staging/backup debris after upgrade"
+}
+
+test_refresh_same_version_skips_download() { # P1: current already installed -> no fetch
+  make_fixtures
+  use_fake_minisign 0
+  install_managed_ui_bundle stable install >/dev/null || {
+    fail "install 9.9.9 failed"
+    return
+  }
+  # Remove the archive so any download attempt fails; a same-version refresh must
+  # still succeed because P1 short-circuits before downloading/verifying.
+  rm -f "${FIXTURE_DIR}/${ARCHIVE_NAME}"
+  install_managed_ui_bundle stable refresh >/dev/null || {
+    fail "same-version refresh re-fetched instead of short-circuiting (P1)"
+    return
+  }
+  assert_ok "current still resolves after skipped refresh" test -f "$(channel_ui_current_dir stable)/index.html"
+}
+
+test_refresh_older_version_refused() { # B3: reject a downgrade to an older signed bundle
+  make_fixtures
+  use_fake_minisign 0
+  install_managed_ui_bundle stable install >/dev/null || {
+    fail "install 9.9.9 failed"
+    return
+  }
+  build_release_fixture "9.9.8" # remote serves an OLDER bundle
+  if install_managed_ui_bundle stable refresh >/dev/null 2>&1; then
+    fail "refresh accepted a downgrade to 9.9.8"
+  fi
+  assert_eq "$(cat "$(channel_ui_current_dir stable)/index.html")" "<html>ui v9.9.9</html>" "downgrade left the installed version intact"
 }
 
 test_tampered_archive_fails_sha256_refresh_degrades() {

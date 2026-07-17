@@ -227,13 +227,22 @@ resolve_happier_release_json_for_tags() {
   shift
   local tag=""
   local api_url=""
+  local attempt_json=""
+  attempt_json="$(mktemp)"
   for tag in "$@"; do
     [[ -z "${tag}" ]] && continue
     api_url="https://api.github.com/repos/${release_repo}/releases/tags/${tag}"
-    if happier_github_curl stdout "${api_url}"; then
+    # Buffer each attempt into its own file. Writing straight to the caller's
+    # single stdout redirect let a partially-written failed attempt corrupt the
+    # JSON the next tag appended to, defeating the fallback. Emit a complete,
+    # non-empty attempt exactly once.
+    if happier_github_curl stdout "${api_url}" >"${attempt_json}" 2>/dev/null && [[ -s "${attempt_json}" ]]; then
+      cat "${attempt_json}"
+      rm -f "${attempt_json}"
       return 0
     fi
   done
+  rm -f "${attempt_json}"
   return 1
 }
 
@@ -339,6 +348,33 @@ install_managed_ui_bundle() {
 
   local version="${checksums_name#checksums-happier-ui-web-v}"
   version="${version%.txt}"
+
+  # Read the installed bundle version from the `current` symlink target
+  # (versions/happier-ui-web-<version>). Used to skip a same-version refresh —
+  # the archive download/verify/extract below is otherwise redone on every timer
+  # run — and to refuse a downgrade to an older validly-signed bundle (a signed
+  # older pair still verifies; only version binding rejects the replay).
+  local installed_version=""
+  if [[ -L "${ui_current_dir}" ]]; then
+    local _installed_link=""
+    _installed_link="$(basename "$(readlink "${ui_current_dir}" 2>/dev/null || true)" 2>/dev/null || true)"
+    if [[ "${_installed_link}" == happier-ui-web-* ]]; then
+      installed_version="${_installed_link#happier-ui-web-}"
+    fi
+  fi
+  if [[ "${verb}" == "refresh" && -n "${installed_version}" ]]; then
+    if [[ "${installed_version}" == "${version}" ]]; then
+      rm -rf "${temp_dir}"
+      printf '%s' "${ui_current_dir}"
+      return 0
+    fi
+    local _oldest=""
+    _oldest="$(printf '%s\n%s\n' "${installed_version}" "${version}" | sort -V | head -n1)"
+    if [[ "${_oldest}" == "${version}" ]]; then
+      _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Resolved Happier UI version ${version} is older than the installed ${installed_version}; refusing downgrade." || return 1
+    fi
+  fi
+
   local archive_name="happier-ui-web-v${version}-web-any.tar.gz"
   # The archive MUST be saved under its release-asset name: the checksums file
   # references that name and `sha256sum -c` opens the file it names — a different
@@ -388,6 +424,9 @@ install_managed_ui_bundle() {
   local version_dir="${ui_versions_dir}/happier-ui-web-${version}"
   local staging_dir="${version_dir}.tmp.$$"
   mkdir -p "${ui_versions_dir}"
+  # Sweep staging/backup debris from interrupted prior runs (other PIDs); the
+  # current run's .tmp.$$/.old.$$ are created after this point.
+  find "${ui_versions_dir}" -mindepth 1 -maxdepth 1 \( -name '*.tmp.*' -o -name '*.old.*' \) -exec rm -rf {} + 2>/dev/null || true
   rm -rf "${staging_dir}"
   mkdir -p "${staging_dir}"
   cp -a "${artifact_root}/." "${staging_dir}/" || {
@@ -398,7 +437,14 @@ install_managed_ui_bundle() {
   if [[ -e "${version_dir}" ]]; then
     old_dir="${version_dir}.old.$$"
     rm -rf "${old_dir}"
-    mv "${version_dir}" "${old_dir}"
+    # Guard the move-aside: refresh runs with errexit suspended (if-condition call
+    # site), so an unguarded failure would fall through and the next mv would nest
+    # the staging dir inside the live version dir, reporting success with stale
+    # content.
+    if ! mv "${version_dir}" "${old_dir}"; then
+      rm -rf "${staging_dir}"
+      _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Failed to move aside the existing Happier UI bundle." || return 1
+    fi
   fi
   if ! mv "${staging_dir}" "${version_dir}"; then
     # Best-effort restore of the previous version before bailing.
@@ -408,7 +454,13 @@ install_managed_ui_bundle() {
     rm -rf "${staging_dir}"
     _happier_ui_bundle_fail "${verb}" "${temp_dir}" "Failed to move the staged Happier UI bundle into place." || return 1
   fi
-  ln -sfn "${version_dir}" "${ui_current_dir}"
+  # Atomic swap: build the new symlink under a temp name, then rename it over
+  # `current` in a single rename(2). `ln -sfn` is unlink+symlink, leaving a
+  # window where `current` does not exist.
+  local current_link_tmp="${ui_current_dir}.tmp.$$"
+  rm -f "${current_link_tmp}"
+  ln -s "${version_dir}" "${current_link_tmp}"
+  mv -T "${current_link_tmp}" "${ui_current_dir}"
   if [[ -n "${old_dir}" ]]; then
     rm -rf "${old_dir}"
   fi
