@@ -46,10 +46,12 @@ assert_fail() { # label cmd...
   return 0
 }
 
-# Extract one top-level function (shfmt style: `name() {` ... `}` at column 0
-# or 2-space body) from a script without executing the script's main flow.
+# Extract one top-level function (`name() {` ... `}` at column 0) from a script
+# without executing the script's main flow. Handles both the POSIX `name()` form
+# and the `function name()` keyword form (the latter is what defeats a bare
+# `/^name() {/` match — e.g. ct/happier.sh's update_script/app_questions).
 extract_function() { # file funcname
-  sed -n "/^$2() {/,/^}/p" "$1"
+  sed -n "/^\(function \)\?$2() {/,/^}/p" "$1"
 }
 
 run_tests() {
@@ -57,9 +59,12 @@ run_tests() {
   for t in $(declare -F | awk '{print $3}' | grep '^test_' | sort); do
     CURRENT_TEST="${t}"
     TESTS_RUN=$((TESTS_RUN + 1))
-    local before_failed="${TESTS_FAILED}"
+    local before_failed="${TESTS_FAILED}" before_skipped="${TESTS_SKIPPED}"
     "${t}"
-    if [[ "${TESTS_FAILED}" == "${before_failed}" ]]; then
+    # Print the pass line only if the test neither failed nor already reported a
+    # skip line (skip() prints its own "ok - ... # SKIP", so an extra "ok" here
+    # would double-report the same test).
+    if [[ "${TESTS_FAILED}" == "${before_failed}" && "${TESTS_SKIPPED}" == "${before_skipped}" ]]; then
       echo "ok - ${t}"
     fi
   done

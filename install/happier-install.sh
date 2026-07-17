@@ -86,6 +86,9 @@ AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"                           
 # classic supply-chain exfil target). sudo children are already env_reset-protected.
 unset HAPPIER_PVE_GITHUB_PAT HAPPIER_PVE_TAILSCALE_AUTHKEY
 is_valid_hhmm() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
+# GitHub PATs are [A-Za-z0-9_] only; anything else would produce an unparseable
+# systemd env drop-in. Extracted as a validator so the gate is unit-testable.
+is_valid_github_pat() { [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]; }
 if [[ "${AUTO_UPDATE}" == "1" ]] && ! is_valid_hhmm "${AUTO_UPDATE_AT}"; then
   msg_warn "Invalid HAPPIER_PVE_AUTO_UPDATE_AT='${AUTO_UPDATE_AT}', falling back to 04:00"
   AUTO_UPDATE_AT="04:00"
@@ -933,7 +936,7 @@ write_daemon_env_dropin() {
 
   # GitHub PATs are [A-Za-z0-9_] only; anything else would produce an unparseable
   # env file (and is almost certainly a paste error), so refuse it up front.
-  if [[ -n "${DAEMON_GITHUB_PAT}" && ! "${DAEMON_GITHUB_PAT}" =~ ^[A-Za-z0-9_]+$ ]]; then
+  if [[ -n "${DAEMON_GITHUB_PAT}" ]] && ! is_valid_github_pat "${DAEMON_GITHUB_PAT}"; then
     msg_warn "Provided GitHub PAT contains characters outside [A-Za-z0-9_]; skipping PAT wiring"
     DAEMON_GITHUB_PAT=""
   fi

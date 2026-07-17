@@ -11,8 +11,9 @@ INSTALL_SH="../../install/happier-install.sh"
 msg_warn() { :; }
 msg_error() { echo "ERR: $*" >&2; }
 
-# is_valid_hhmm is a one-liner, not extract_function-shaped — pull it verbatim.
+# is_valid_hhmm/is_valid_github_pat are one-liners, not extract_function-shaped — pull them verbatim.
 eval "$(grep '^is_valid_hhmm()' "${INSTALL_SH}")"
+eval "$(grep '^is_valid_github_pat()' "${INSTALL_SH}")"
 eval "$(extract_function "${INSTALL_SH}" normalize_url_no_trailing_slash)"
 eval "$(extract_function "${INSTALL_SH}" normalize_https_public_url_or_empty)"
 eval "$(extract_function "${INSTALL_SH}" extract_https_url_from_text)"
@@ -21,6 +22,7 @@ fn_exists() { declare -F "$1" >/dev/null; }
 
 test_extraction_worked() {
   assert_ok "is_valid_hhmm extracted" fn_exists is_valid_hhmm
+  assert_ok "is_valid_github_pat extracted" fn_exists is_valid_github_pat
   assert_ok "normalize_url_no_trailing_slash extracted" fn_exists normalize_url_no_trailing_slash
   assert_ok "normalize_https_public_url_or_empty extracted" fn_exists normalize_https_public_url_or_empty
   assert_ok "extract_https_url_from_text extracted" fn_exists extract_https_url_from_text
@@ -35,6 +37,17 @@ test_is_valid_hhmm() {
   assert_fail "12:60 rejected" is_valid_hhmm "12:60"
   assert_fail "empty rejected" is_valid_hhmm ""
   assert_fail "garbage rejected" is_valid_hhmm "noon"
+}
+
+test_is_valid_github_pat() {
+  assert_ok "classic hex token" is_valid_github_pat "ghp_ABCdef0123456789"
+  assert_ok "fine-grained token (underscores)" is_valid_github_pat "github_pat_11ABC_def456"
+  assert_ok "plain alnum" is_valid_github_pat "abc123XYZ"
+  assert_fail "empty rejected" is_valid_github_pat ""
+  assert_fail "dash rejected" is_valid_github_pat "ghp-with-dash"
+  assert_fail "space rejected" is_valid_github_pat "has space"
+  assert_fail "shell metachar rejected" is_valid_github_pat 'tok;rm -rf'
+  assert_fail "quote rejected" is_valid_github_pat 'tok"quote'
 }
 
 test_normalize_url_no_trailing_slash() {
@@ -54,6 +67,12 @@ test_normalize_https_public_url_or_empty() {
   assert_eq "$(normalize_https_public_url_or_empty "https://")" "" "empty host rejected"
   assert_eq "$(normalize_https_public_url_or_empty "not a url")" "" "garbage rejected"
   assert_eq "$(normalize_https_public_url_or_empty "")" "" "empty rejected"
+  # D12: documented port-preserve + query/hash-drop behavior.
+  assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com:8443")" "https://happier.example.com:8443" "explicit port preserved"
+  assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com:8443/")" "https://happier.example.com:8443" "port preserved with trailing slash stripped"
+  assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com/app?token=abc")" "https://happier.example.com/app" "query string dropped"
+  assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com/app#frag")" "https://happier.example.com/app" "fragment dropped"
+  assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com:8443/app/?x=1#y")" "https://happier.example.com:8443/app" "port kept, path kept, query+hash+slash dropped"
 }
 
 test_extract_https_url_from_text() {
