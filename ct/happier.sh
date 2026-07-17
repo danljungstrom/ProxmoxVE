@@ -94,7 +94,9 @@ function update_script() {
       exit 1
     fi
 
+    local ui_managed=0
     if [[ -f "${config_env_path}" ]] && grep -q '^HAPPIER_SERVER_UI_DIR=' "${config_env_path}"; then
+      ui_managed=1
       msg_info "Refreshing ${APP} web UI bundle (channel: ${installer_channel})"
       if install_managed_ui_bundle "${installer_channel}" refresh >/dev/null; then
         msg_ok "Refreshed ${APP} web UI bundle"
@@ -130,6 +132,25 @@ function update_script() {
     local relay_install_args=(relay host install --mode system --channel "${installer_channel}")
     if systemctl is-active --quiet "${relay_service}-updater.timer" 2>/dev/null; then
       relay_install_args+=(--auto-update)
+    fi
+    # A3: the bare reinstall resets the relay env to vendor defaults (verified live
+    # on dev channel: it rewrites HAPPIER_SERVER_UI_DIR from the installer's managed
+    # /var/lib/... bundle dir back to /opt/...). Re-pass the install-managed env so
+    # the update preserves it — otherwise the freshly-refreshed UI bundle stops
+    # being served after every update.
+    if [[ "${ui_managed}" -eq 1 ]]; then
+      relay_install_args+=(--env "HAPPIER_SERVER_UI_DIR=$(channel_ui_current_dir "${installer_channel}")")
+    fi
+    if [[ -f "${config_env_path}" ]]; then
+      local _envk="" _envv=""
+      for _envk in HAPPIER_SERVER_HOST PORT HAPPIER_PUBLIC_SERVER_URL HAPPIER_WEBAPP_URL; do
+        _envv="$(grep -aE "^${_envk}=" "${config_env_path}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+        # `if`, not `&&`: an empty value (e.g. the proxy URLs on a non-proxy install)
+        # must not make the guard return non-zero under the update's errexit trap.
+        if [[ -n "${_envv}" ]]; then
+          relay_install_args+=(--env "${_envk}=${_envv}")
+        fi
+      done
     fi
     # Guard the reinstall: it runs under the ERR trap between the CLI self-update
     # and the daemon restart, so an unguarded failure would abort the update with
