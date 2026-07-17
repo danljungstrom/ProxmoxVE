@@ -41,7 +41,7 @@
             "type": "warning"
         },
         {
-            "text": "Optional: choose release channel by setting HAPPIER_PVE_CHANNEL=stable|preview|dev. Advanced from-source installs can override the bootstrap package via HAPPIER_PVE_STACK_PACKAGE='@happier-dev/stack@<tag-or-version>'. Non-interactive installs: presetting any HAPPIER_PVE_* variable skips its prompt (preset them all plus mode=default for a fully unattended install).",
+            "text": "Optional: choose release channel by setting HAPPIER_PVE_CHANNEL=stable|preview|dev. Advanced from-source installs can override the bootstrap package via HAPPIER_PVE_STACK_PACKAGE='@happier-dev/stack@<tag-or-version>'. Non-interactive installs: presetting any HAPPIER_PVE_* variable skips its prompt (preset them all, and set PHS_SILENT=1 with mode=default, for a fully unattended install).",
             "type": "info"
         },
         {

@@ -121,3 +121,23 @@ as approved for history.
 - **Tailscale pre-auth key no longer passed on argv.** `tailscale up --auth-key=file:<600
   temp file>` instead of `--authkey=<key>`, so the key is not readable in /proc/*/cmdline
   during the enrollment window.
+
+## Deviations (matrix hardening, 2026-07-02/03)
+
+Found and fixed during the unattended LXC matrix run (see `docs/audits/2026-07-03-lxc-matrix.md`);
+the current vendor CLI / service behavior differed from what the 2026-07-01 implementation assumed.
+
+- **`--auto-update` capability probe before use.** Released CLIs may not know the auto-update
+  flags yet (`relay host install` rejects unknown arguments), so `install_managed_relay_runtime`
+  probes `relay host install --help` and only passes `--auto-update --auto-update-at` when the flag
+  is advertised, warning and continuing (with the timer disabled) otherwise instead of failing the
+  install. (The 2026-07-16 audit later hardened this probe against a pipefail/SIGPIPE false negative.)
+- **Update-helper pins baked at install time.** `write_update_helper` bakes the install-time
+  `INSTALLER_REPO`/`INSTALLER_REF` as the generated `/usr/bin/update` DEFAULTS (env still overrides
+  at update time), so a pinned install updates from the same ref instead of silently jumping to
+  `main`.
+- **Relay-unit reconciliation reinstall.** The daemon `service install --mode system` was observed
+  to remove/absorb the relay unit during reconciliation on fresh installs, so
+  `ensure_relay_host_installed` reinstalls the relay with the exact captured argument set when the
+  unit vanished. (The 2026-07-16 audit added a post-check that hard-fails if the unit is still
+  missing after the recovery reinstall.)
