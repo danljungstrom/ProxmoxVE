@@ -152,11 +152,17 @@ function update_script() {
     if [[ "${relay_install_rc}" -ne 0 ]]; then
       msg_warn "Relay host reinstall failed (rc=${relay_install_rc}); continuing with the existing relay unit"
     fi
-    # Restore the captured autostart state, then restart only if it was running.
+    # Restore the captured autostart + running state independently: the reinstall
+    # can both (re-)enable and start the unit, so restore enabled-vs-disabled and
+    # active-vs-inactive separately — otherwise an enabled-but-manually-stopped
+    # relay would be silently turned back on by the update.
     if [[ "${relay_was_enabled}" -eq 0 ]]; then
-      systemctl disable -q --now "${relay_service}" >/dev/null 2>&1 || true
-    elif [[ "${relay_was_active}" -eq 1 ]]; then
+      systemctl disable -q "${relay_service}" >/dev/null 2>&1 || true
+    fi
+    if [[ "${relay_was_active}" -eq 1 ]]; then
       restart_happier_unit "${relay_service}"
+    else
+      systemctl stop "${relay_service}" >/dev/null 2>&1 || true
     fi
     # Devbox: the relay restart above does not cycle the daemon, so a CLI self-update
     # leaves the running daemon on the old CLI. Restart it (no-op for server_only).

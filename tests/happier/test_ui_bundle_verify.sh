@@ -124,6 +124,9 @@ test_install_happy_path_and_same_version_refresh() {
 }
 
 test_refresh_newer_version_swaps() { # A6/A7: swap the live bundle to a newer version
+  # NB: this asserts the swap RESULT (current -> new version, no debris), not the
+  # atomicity of the symlink swap itself. A6's no-observable-gap property comes from
+  # `mv -T` (a single rename(2)) and can't be proven without a concurrent reader.
   make_fixtures
   use_fake_minisign 0
   install_managed_ui_bundle stable install >/dev/null || {

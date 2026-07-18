@@ -13,7 +13,7 @@ source /dev/stdin <<<"${FUNCTIONS_FILE_PATH}"
 # are available. INSTALLER_REPO/INSTALLER_REF are inherited from build.func via
 # lxc-attach (the shared file also defaults them when sourced standalone).
 HAPPIER_COMMON_FUNC_URL="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/happier-common.func"
-HAPPIER_COMMON_FUNC="$(curl -fsSL "${HAPPIER_COMMON_FUNC_URL}")" || {
+HAPPIER_COMMON_FUNC="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 "${HAPPIER_COMMON_FUNC_URL}")" || {
   msg_error "Failed to download happier-common.func from: ${HAPPIER_COMMON_FUNC_URL}"
   exit 1
 }
@@ -511,6 +511,10 @@ script="\$(mktemp)"
 trap 'rm -f "\${script}"' EXIT
 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 \\
   "https://raw.githubusercontent.com/\${REPO}/\${REF}/ct/happier.sh" -o "\${script}"
+[ -s "\${script}" ] || {
+  echo "update: downloaded ct/happier.sh is empty (nothing to run)" >&2
+  exit 1
+}
 INSTALLER_REPO="\${REPO}" INSTALLER_REF="\${REF}" bash "\${script}"
 UPDATEEOF
   chmod +x /usr/bin/update
