@@ -49,3 +49,14 @@ production CTs (105 rust-server, 106 code, 107 happier, 202 happier-dev). No pro
 
 All matrix CTs (103/104) destroyed; host runner/log/staging files removed; production CTs
 (105/106/107/202) untouched and running; available memory restored to ~5.7 GB.
+
+## HEAD re-smoke (2026-07-20)
+
+Re-ran a dev-channel devbox install + update on the current branch HEAD (`04aa8b015` — includes the
+post-matrix test/refactor/Codex-fix commits the 07-17 run predated) to close that gap. Host had
+~13 GB free. **Install rc=0** (relay active, UI served, "Completed successfully"). **Update rc=0**
+with two edge cases driven live: **A3** — `HAPPIER_SERVER_UI_DIR` restored to `/var/lib/...` after
+being reset to `/opt/...`; and the **Codex A2 fix** — a relay left `enabled` but manually stopped
+(`systemctl stop`) before the update stayed `enabled` + `inactive` afterward (the old code would
+have turned it back on). Confirms the D2 `detect_installed_channel` refactor, the A2 restore rework,
+and A3 all work on HEAD. CT destroyed, staging removed, production untouched.
