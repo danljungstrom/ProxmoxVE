@@ -250,7 +250,17 @@ test_real_minisign_good_and_bad_signature() {
     return
   }
   assert_ok "current symlink resolves (real sig)" test -f "$(channel_ui_current_dir stable)/index.html"
-  # Now corrupt the signed file: signature must no longer verify.
+  # Corrupting the *same* version can't be observed through refresh: P1 short-
+  # circuits an already-installed version before re-downloading/verifying (see
+  # test_refresh_same_version_skips_download). Serve a NEWER version, sign it,
+  # then corrupt it so the download+verify path runs and minisign must reject the
+  # broken signature.
+  build_release_fixture "9.9.10"
+  minisign -S -W -s "${keydir}/test.key" -m "${FIXTURE_DIR}/${CHECKSUMS_NAME}" \
+    -x "${FIXTURE_DIR}/${CHECKSUMS_NAME}.minisig" >/dev/null 2>&1 || {
+    fail "could not sign the 9.9.10 fixture checksums"
+    return
+  }
   echo "# drift" >>"${FIXTURE_DIR}/${CHECKSUMS_NAME}"
   if install_managed_ui_bundle stable refresh >/dev/null 2>&1; then
     fail "refresh succeeded although the checksums file no longer matches its signature"
