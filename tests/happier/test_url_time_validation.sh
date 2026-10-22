@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# D3: edge-case tests for the installer's pure validators. The functions are
-# extracted from install/happier-install.sh by name (the script itself runs a
-# main flow, so it cannot be sourced whole).
+# D3: edge-case tests for the pure validators. The shared ones come from
+# misc/happier-common.func; the installer-only ones are extracted from
+# install/happier-install.sh by name (it runs a main flow, so it cannot be sourced).
 set -u
 cd "$(dirname "$0")" || exit 1
 # shellcheck disable=SC1091 # test-local helper, resolved at runtime
@@ -11,11 +11,11 @@ INSTALL_SH="../../install/happier-install.sh"
 msg_warn() { :; }
 msg_error() { echo "ERR: $*" >&2; }
 
-# is_valid_hhmm/is_valid_github_pat are one-liners, not extract_function-shaped — pull them verbatim.
-eval "$(grep '^is_valid_hhmm()' "${INSTALL_SH}")"
+# shellcheck disable=SC1091 # unit under test, resolved at runtime
+source ../../misc/happier-common.func
+# is_valid_github_pat is a one-liner, not extract_function-shaped — pull it verbatim.
 eval "$(grep '^is_valid_github_pat()' "${INSTALL_SH}")"
 eval "$(extract_function "${INSTALL_SH}" normalize_url_no_trailing_slash)"
-eval "$(extract_function "${INSTALL_SH}" normalize_https_public_url_or_empty)"
 eval "$(extract_function "${INSTALL_SH}" extract_https_url_from_text)"
 
 fn_exists() { declare -F "$1" >/dev/null; }

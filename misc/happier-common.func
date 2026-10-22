@@ -42,6 +42,41 @@ normalize_install_method() {
   esac
 }
 
+# HH:MM (24h) for the auto-update timer.
+is_valid_hhmm() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
+
+# Print the normalized public HTTPS URL (scheme+host+port+path, no trailing
+# slash, query/hash dropped), or nothing when the input is not a usable https://
+# URL (wrong scheme, no host, embedded credentials). Used by the host-side prompt
+# validation and the installer, so both accept exactly the same URLs.
+normalize_https_public_url_or_empty() {
+  python3 - "$1" <<'PY' 2>/dev/null || true
+import sys
+from urllib.parse import urlsplit
+
+raw = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if not raw:
+  sys.exit(0)
+
+u = urlsplit(raw)
+if u.scheme != "https":
+  sys.exit(0)
+if not u.netloc:
+  sys.exit(0)
+if u.username or u.password:
+  sys.exit(0)
+host = u.hostname
+if not host:
+  sys.exit(0)
+port = f":{u.port}" if u.port else ""
+path = u.path or ""
+
+# Drop query/hash and strip trailing slashes for consistency.
+out = f"https://{host}{port}{path}".rstrip("/")
+print(out, end="")
+PY
+}
+
 channel_cli_name() {
   case "$1" in
     stable) printf '%s' "happier" ;;
@@ -157,14 +192,13 @@ HAPPIER_STACK_DEFAULT_LABEL="dev.happier.stack"
 HAPPIER_STACK_DEFAULT_ENV="/home/happier/.happier/stacks/main/env"
 
 # Resolve the hstack layout via `hstack where --json` (run as the happier user).
-# Sets HSTACK_WHERE_HOME/_NAME/_LABEL/_ENV/_WORKSPACE ("" when undetected) —
+# Sets HSTACK_WHERE_HOME/_LABEL/_ENV/_WORKSPACE ("" when undetected) —
 # callers apply their own defaults for empty fields. Requires jq; without it (or
 # on any hstack failure) every field stays empty and the callers' defaults win.
 resolve_hstack_layout() {
   local hstack_bin="$1"
   local where_json=""
   HSTACK_WHERE_HOME=""
-  HSTACK_WHERE_NAME=""
   HSTACK_WHERE_LABEL=""
   HSTACK_WHERE_ENV=""
   HSTACK_WHERE_WORKSPACE=""
@@ -174,8 +208,6 @@ resolve_hstack_layout() {
   fi
   # shellcheck disable=SC2034 # consumed by the sourcing scripts, not this file
   HSTACK_WHERE_HOME="$(printf '%s' "${where_json}" | jq -r '.homeDir // empty' 2>/dev/null || true)"
-  # shellcheck disable=SC2034
-  HSTACK_WHERE_NAME="$(printf '%s' "${where_json}" | jq -r '.stack.name // empty' 2>/dev/null || true)"
   # shellcheck disable=SC2034
   HSTACK_WHERE_LABEL="$(printf '%s' "${where_json}" | jq -r '.stack.label // empty' 2>/dev/null || true)"
   # shellcheck disable=SC2034

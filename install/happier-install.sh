@@ -82,7 +82,6 @@ AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"                           
 # (happier.dev bootstrap, NodeSource, `npm install -g` lifecycle scripts — the
 # classic supply-chain exfil target). sudo children are already env_reset-protected.
 unset HAPPIER_PVE_GITHUB_PAT HAPPIER_PVE_TAILSCALE_AUTHKEY
-is_valid_hhmm() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
 # GitHub PATs are [A-Za-z0-9_] only; anything else would produce an unparseable
 # systemd env drop-in. Extracted as a validator so the gate is unit-testable.
 is_valid_github_pat() { [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]; }
@@ -95,6 +94,7 @@ TAILSCALE_HTTPS_URL=""
 TAILSCALE_NEEDS_LOGIN="0"
 TAILSCALE_AUTH_INVALID="0"
 TAILSCALE_AUTH_URL=""
+TAILSCALE_SERVE_ENABLE_URL=""
 HAPPIER_CLI_BIN=""
 HAPPIER_CLI_NAME=""
 HAPPIER_SERVER_PORT="${SERVER_PORT_RAW:-3005}"
@@ -105,34 +105,6 @@ normalize_url_no_trailing_slash() {
   v="${v%/}"
   while [[ "$v" == */ ]]; do v="${v%/}"; done
   printf '%s' "$v"
-}
-
-normalize_https_public_url_or_empty() {
-  python3 - "$1" <<'PY' 2>/dev/null || true
-import sys
-from urllib.parse import urlsplit
-
-raw = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-if not raw:
-  sys.exit(0)
-
-u = urlsplit(raw)
-if u.scheme != "https":
-  sys.exit(0)
-if not u.netloc:
-  sys.exit(0)
-if u.username or u.password:
-  sys.exit(0)
-host = u.hostname
-if not host:
-  sys.exit(0)
-port = f":{u.port}" if u.port else ""
-path = u.path or ""
-
-# Drop query/hash and strip trailing slashes for consistency.
-out = f"https://{host}{port}{path}".rstrip("/")
-print(out, end="")
-PY
 }
 
 extract_https_url_from_text() {
@@ -315,9 +287,17 @@ enable_tailscale_serve_url() {
     return 1
   fi
   "${TAILSCALE_BIN:-tailscale}" serve reset >/dev/null 2>&1 || true
-  local _try
-  for _try in $(seq 1 45); do
-    "${TAILSCALE_BIN:-tailscale}" serve --bg "http://127.0.0.1:${HAPPIER_SERVER_PORT}" >/dev/null 2>&1 || true
+  # Each `serve --bg` is time-boxed: when Serve/HTTPS is not enabled on the
+  # tailnet, tailscale prints an enable URL and waits for it indefinitely. That
+  # text is also the only failure worth stopping early for — anything else is
+  # cert/DNS lag, which the retries ride out (~2 min budget).
+  local _try serve_out=""
+  for _try in $(seq 1 30); do
+    serve_out="$(timeout 20 "${TAILSCALE_BIN:-tailscale}" serve --bg "http://127.0.0.1:${HAPPIER_SERVER_PORT}" </dev/null 2>&1 || true)"
+    if grep -qi 'not enabled' <<<"${serve_out}"; then
+      TAILSCALE_SERVE_ENABLE_URL="$(extract_https_url_from_text <<<"${serve_out}" || true)"
+      break
+    fi
     TAILSCALE_HTTPS_URL="$(resolve_tailscale_https_url_with_retries 2 1 || true)"
     if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
       break
@@ -326,6 +306,8 @@ enable_tailscale_serve_url() {
   done
   if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
     msg_ok "Tailscale Serve enabled"
+  elif [[ -n "${TAILSCALE_SERVE_ENABLE_URL}" ]]; then
+    msg_warn "Tailscale Serve is not enabled on your tailnet. Enable it: ${TAILSCALE_SERVE_ENABLE_URL}"
   else
     msg_ok "Tailscale Serve attempted (no HTTPS URL detected yet)"
   fi
@@ -350,12 +332,13 @@ install_tailscale_pkg() {
   local keyring_tmp="" list_tmp=""
   keyring_tmp="$(mktemp)"
   list_tmp="$(mktemp)"
-  if ! curl -fsSL "${base}.noarmor.gpg" -o "${keyring_tmp}" || [[ ! -s "${keyring_tmp}" ]]; then
+  local -a curl_net_opts=(--retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120)
+  if ! curl -fsSL "${curl_net_opts[@]}" "${base}.noarmor.gpg" -o "${keyring_tmp}" || [[ ! -s "${keyring_tmp}" ]]; then
     rm -f "${keyring_tmp}" "${list_tmp}"
     msg_error "Failed to download the Tailscale signing key for ${os_id}/${os_codename}."
     return 1
   fi
-  if ! curl -fsSL "${base}.tailscale-keyring.list" -o "${list_tmp}" || [[ ! -s "${list_tmp}" ]]; then
+  if ! curl -fsSL "${curl_net_opts[@]}" "${base}.tailscale-keyring.list" -o "${list_tmp}" || [[ ! -s "${list_tmp}" ]]; then
     rm -f "${keyring_tmp}" "${list_tmp}"
     msg_error "Failed to download the Tailscale apt source list for ${os_id}/${os_codename}."
     return 1
@@ -499,6 +482,9 @@ print_access_urls() {
   fi
   if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
     echo -e "${INFO}${YW} Access (HTTPS): ${CL}${TAB}${GATEWAY}${BGN}${TAILSCALE_HTTPS_URL}${CL}"
+  elif [[ -n "${TAILSCALE_SERVE_ENABLE_URL}" ]]; then
+    echo -e "${INFO}${YW} Tailscale Serve is not enabled on your tailnet.${CL} Enable it, then run 'tailscale serve --bg http://127.0.0.1:${HAPPIER_SERVER_PORT}':"
+    echo -e "${TAB}${GATEWAY}${BGN}${TAILSCALE_SERVE_ENABLE_URL}${CL}"
   fi
 }
 
@@ -510,6 +496,11 @@ run_daemon_auth_if_requested() {
   local restart_unit="$1"
   shift
   [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]] || return 0
+  # Headless runs (no terminal) would just sit out the 5-minute QR timeout.
+  if [[ ! -t 1 ]]; then
+    msg_warn "No terminal attached: skipping interactive daemon auth (run 'auth login' later)."
+    return 0
+  fi
   if run_daemon_auth_interactive "$@"; then
     if [[ "${AUTOSTART}" == "1" ]]; then
       restart_happier_unit "${restart_unit}"
@@ -590,9 +581,9 @@ if [[ -z "${STACK_PACKAGE}" ]]; then
 fi
 
 if [[ "${HAPPIER_CHANNEL}" == "dev" && "${SERVE_UI}" != "1" ]]; then
-  msg_info "Dev channel selected without local UI"
-  msg_info "The dev lane does not have a hosted web UI. Mobile and CLI flows still work, but web onboarding links will be limited."
-  msg_ok "Continuing with dev lane"
+  # One msg_warn, not msg_info pairs: the engine resumes an unclosed msg_info
+  # spinner after later msg_ok calls.
+  msg_warn "Dev channel without a local UI: the dev lane has no hosted web UI. Mobile and CLI flows still work, but web onboarding links will be limited."
 fi
 
 msg_info "Installing Dependencies"
@@ -787,6 +778,9 @@ install_devbox_background_service() {
       exit 1
     fi
   fi
+  # The CLI ran as root with HOME=/home/happier: hand anything it created there
+  # back to the daemon's user.
+  chown -R happier:happier /home/happier/.happier 2>/dev/null || true
   msg_ok "Background service installed"
 }
 
@@ -824,10 +818,12 @@ install_devbox_agents() {
   fi
 
   msg_info "Installing claude (native installer, as happier)"
-  if $STD sudo -u happier -H bash -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+  # Download to a temp file with timeouts, then run it (no `curl | bash`).
+  # shellcheck disable=SC2016 # expanded by the happier user's shell, not here
+  if $STD sudo -u happier -H bash -c 'f="$(mktemp)" && curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 https://claude.ai/install.sh -o "$f" && [ -s "$f" ] && bash "$f"; rc=$?; rm -f "$f"; exit "$rc"'; then
     msg_ok "Installed claude"
   else
-    msg_warn "claude install failed (non-fatal) — install it manually and re-run update"
+    msg_warn "claude install failed (non-fatal) — later, as the happier user: curl -fsSL https://claude.ai/install.sh | bash"
   fi
 
   if ! command -v npm >/dev/null 2>&1; then
@@ -853,15 +849,18 @@ install_devbox_agents() {
   if $STD npm install -g "${codex_pkg}"; then
     msg_ok "Installed codex"
   else
-    msg_warn "codex install failed (non-fatal) — install it manually and re-run update"
+    msg_warn "codex install failed (non-fatal) — install it later with: npm install -g ${codex_pkg}"
   fi
 }
 
 # Write a chmod-600 systemd drop-in giving the daemon the agent paths (+ optional PAT).
-# Discovers the daemon unit created by `service install --mode system`; if none is found
-# yet, warns and skips rather than writing to a guessed path.
+#   $1 = the systemd unit running the daemon ("" when there is none: autostart off)
+#   $2 = the command that starts the daemon manually, shown when there is no unit
+# The unit differs per method: installers' `service install` creates happier-daemon*,
+# while from_source runs the daemon inside the hstack stack unit.
 write_daemon_env_dropin() {
-  local claude_path codex_path daemon_unit dropin_dir dropin envfile
+  local daemon_unit="$1" manual_start_cmd="$2"
+  local claude_path codex_path dropin_dir dropin envfile
   claude_path="$(command -v claude || true)"
   # The native installer puts claude in the happier user's ~/.local/bin, which
   # root's PATH does not include.
@@ -882,12 +881,11 @@ write_daemon_env_dropin() {
     return 0
   fi
 
-  daemon_unit="$(find_happier_daemon_unit)"
   if [[ -z "${daemon_unit}" ]]; then
-    # No systemd unit (e.g. AUTOSTART=0 / manually-started daemon): a drop-in has nothing
+    # No systemd unit (AUTOSTART=0 / manually-started daemon): a drop-in has nothing
     # to attach to, so print the exact env to set before starting the daemon manually
     # rather than silently dropping the wiring. (The PAT value is never printed.)
-    msg_warn "No daemon systemd unit found (autostart off / manual start) — set the daemon env yourself before 'happier daemon start':"
+    msg_warn "No daemon systemd unit (autostart off) — set the daemon env yourself before starting it with: ${manual_start_cmd}"
     if [[ -n "${claude_path}" ]]; then echo "    export HAPPIER_CLAUDE_PATH=${claude_path}"; fi
     if [[ -n "${codex_path}" ]]; then echo "    export HAPPIER_CODEX_PATH=${codex_path}"; fi
     if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then echo "    export GITHUB_PERSONAL_ACCESS_TOKEN=<the token you provided>"; fi
@@ -1027,7 +1025,9 @@ run_daemon_auth_interactive() {
 
   saved_int_trap="$(trap -p INT)"
   trap 'interrupted=1' INT
-  timeout 300 sudo -u happier -H "$@" </dev/null || rc=$?
+  # --foreground: without it timeout moves itself into its own process group, so
+  # the terminal's Ctrl+C never reaches it and "skip" waited out the full 300s.
+  timeout --foreground 300 sudo -u happier -H "$@" </dev/null || rc=$?
   if [[ -n "${saved_int_trap}" ]]; then eval "${saved_int_trap}"; else trap - INT; fi
 
   if ((interrupted)); then
@@ -1063,7 +1063,7 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
     fi
 
     install_devbox_agents
-    write_daemon_env_dropin
+    write_daemon_env_dropin "$(find_happier_daemon_unit)" "sudo -u happier -H ${HAPPIER_CLI_NAME} daemon start"
   fi
 
   install_auto_update_timer
@@ -1320,11 +1320,14 @@ fi
 # skips-with-warn if none is found). Auto-update is installers-only (warned about above).
 if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
   install_devbox_agents
-  write_daemon_env_dropin
+  FROM_SOURCE_DAEMON_UNIT=""
+  if [[ "${AUTOSTART}" == "1" && -f "/etc/systemd/system/${STACK_LABEL}.service" ]]; then
+    FROM_SOURCE_DAEMON_UNIT="${STACK_LABEL}.service"
+  fi
+  write_daemon_env_dropin "${FROM_SOURCE_DAEMON_UNIT}" "sudo -u happier -H ${HSTACK_BIN} start --restart"
 fi
 
 if [[ "${REMOTE_ACCESS}" == "tailscale" && "${TAILSCALE_ENABLE_SERVE}" == "1" ]]; then
-  msg_info "Enabling Tailscale Serve (best-effort)"
   sudo -u happier -H "${HSTACK_BIN}" tailscale enable >/dev/null 2>&1 || true
 
   enable_tailscale_serve_url || true

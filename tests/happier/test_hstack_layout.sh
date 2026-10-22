@@ -47,7 +47,6 @@ test_resolve_hstack_layout_full() {
   hb="$(make_hstack '{"homeDir":"/home/h/.stack","stack":{"name":"main","label":"dev.h.stack"},"envFiles":{"main":{"path":"/home/h/.happier/stacks/main/env"}},"workspaceDir":"/home/h/.stack/workspace/main"}')"
   resolve_hstack_layout "${hb}"
   assert_eq "${HSTACK_WHERE_HOME}" "/home/h/.stack" "homeDir parsed"
-  assert_eq "${HSTACK_WHERE_NAME}" "main" "stack.name parsed"
   assert_eq "${HSTACK_WHERE_LABEL}" "dev.h.stack" "stack.label parsed"
   assert_eq "${HSTACK_WHERE_ENV}" "/home/h/.happier/stacks/main/env" "envFiles.main.path parsed"
   assert_eq "${HSTACK_WHERE_WORKSPACE}" "/home/h/.stack/workspace/main" "workspaceDir parsed"
@@ -63,7 +62,6 @@ test_resolve_hstack_layout_workspace_fallback() {
   hb="$(make_hstack '{"homeDir":"/h","workspace":{"dir":"/h/ws"}}')"
   resolve_hstack_layout "${hb}"
   assert_eq "${HSTACK_WHERE_WORKSPACE}" "/h/ws" "workspace.dir fallback used"
-  assert_eq "${HSTACK_WHERE_NAME}" "" "absent stack.name -> empty"
 }
 
 test_resolve_hstack_layout_bad_json_all_empty() {

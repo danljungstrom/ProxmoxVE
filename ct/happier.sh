@@ -123,6 +123,9 @@ function update_script() {
       local _envk="" _envv=""
       for _envk in HAPPIER_SERVER_HOST PORT HAPPIER_PUBLIC_SERVER_URL HAPPIER_WEBAPP_URL; do
         _envv="$(grep -aE "^${_envk}=" "${config_env_path}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+        # Re-passed via --env, so strip one layer of surrounding quotes.
+        _envv="${_envv#[\"\']}"
+        _envv="${_envv%[\"\']}"
         # `if`, not `&&`: an empty value (e.g. the proxy URLs on a non-proxy install)
         # must not make the guard return non-zero under the update's errexit trap.
         if [[ -n "${_envv}" ]]; then
@@ -137,6 +140,8 @@ function update_script() {
     "${cli_bin}" "${relay_install_args[@]}" || relay_install_rc=$?
     if [[ "${relay_install_rc}" -ne 0 ]]; then
       msg_warn "Relay host reinstall failed (rc=${relay_install_rc}); continuing with the existing relay unit"
+    else
+      msg_ok "Updated ${APP} relay host"
     fi
     # Restore the captured autostart + running state independently: the reinstall
     # can both (re-)enable and start the unit, so restore enabled-vs-disabled and
@@ -237,6 +242,13 @@ function app_questions() {
   local _preset_channel="${HAPPIER_PVE_CHANNEL+x}${HAPPIER_PVE_HSTACK_CHANNEL+x}"
   local _preset_agents="${HAPPIER_PVE_INSTALL_AGENTS+x}" _preset_pat="${HAPPIER_PVE_GITHUB_PAT+x}" _preset_au="${HAPPIER_PVE_AUTO_UPDATE+x}"
 
+  # Unattended (PHS_SILENT=1): never prompt — un-preset knobs take their defaults.
+  if [[ "${PHS_SILENT:-0}" == "1" ]]; then
+    HAPPIER_PVE_INSTALL_TYPE="${HAPPIER_PVE_INSTALL_TYPE:-devbox}"
+    _preset_type=x _preset_ui=x _preset_autostart=x _preset_remote=x _preset_auth=x
+    _preset_channel=x _preset_agents=x _preset_pat=x _preset_au=x
+  fi
+
   HAPPIER_PVE_INSTALL_TYPE="${HAPPIER_PVE_INSTALL_TYPE:-}"
   HAPPIER_PVE_SERVE_UI="${HAPPIER_PVE_SERVE_UI:-1}"
   HAPPIER_PVE_AUTOSTART="${HAPPIER_PVE_AUTOSTART:-1}"
@@ -301,8 +313,8 @@ function app_questions() {
         exit 1
         ;;
     esac
-    if [[ "${HAPPIER_PVE_REMOTE_ACCESS}" == "proxy" && -z "${HAPPIER_PVE_PUBLIC_URL}" ]]; then
-      msg_error "HAPPIER_PVE_REMOTE_ACCESS=proxy requires HAPPIER_PVE_PUBLIC_URL."
+    if [[ "${HAPPIER_PVE_REMOTE_ACCESS}" == "proxy" && -z "$(normalize_https_public_url_or_empty "${HAPPIER_PVE_PUBLIC_URL}")" ]]; then
+      msg_error "HAPPIER_PVE_REMOTE_ACCESS=proxy requires HAPPIER_PVE_PUBLIC_URL to be a valid https:// URL (got: '${HAPPIER_PVE_PUBLIC_URL}')."
       exit 1
     fi
   fi
@@ -318,11 +330,16 @@ function app_questions() {
     ) || exit_script
 
     if [[ "${HAPPIER_PVE_REMOTE_ACCESS}" == "proxy" ]]; then
-      HAPPIER_PVE_PUBLIC_URL=$(
-        whiptail --backtitle "${BACKTITLE}" --title "CUSTOM HTTPS URL" --inputbox \
-          "\nEnter the HTTPS URL of your reverse proxy.\n\nExample:\n  https://happier.example.com\n\nThis URL will be embedded in QR codes/deep links and must be reachable from your phone.\n" 18 72 \
-          3>&1 1>&2 2>&3
-      ) || exit_script
+      while true; do
+        HAPPIER_PVE_PUBLIC_URL=$(
+          whiptail --backtitle "${BACKTITLE}" --title "CUSTOM HTTPS URL" --inputbox \
+            "\nEnter the HTTPS URL of your reverse proxy.\n\nExample:\n  https://happier.example.com\n\nThis URL will be embedded in QR codes/deep links and must be reachable from your phone.\n" 18 72 \
+            "${HAPPIER_PVE_PUBLIC_URL}" 3>&1 1>&2 2>&3
+        ) || exit_script
+        [[ -n "$(normalize_https_public_url_or_empty "${HAPPIER_PVE_PUBLIC_URL}")" ]] && break
+        whiptail --backtitle "${BACKTITLE}" --title "INVALID URL" --msgbox \
+          "\n'${HAPPIER_PVE_PUBLIC_URL}' is not a valid https:// URL (no credentials).\n" 10 72
+      done
       break
     fi
 
@@ -388,13 +405,22 @@ function app_questions() {
     if (whiptail --backtitle "${BACKTITLE}" --title "AUTO-UPDATE" --yesno \
       "\nEnable automatic updates?\n\nInstalls a daily systemd timer that runs this container's 'update' unattended (CLI self-update + relay reinstall + daemon restart). Default: No.\n" 13 72 --defaultno); then
       HAPPIER_PVE_AUTO_UPDATE="1"
-      HAPPIER_PVE_AUTO_UPDATE_AT=$(
-        whiptail --backtitle "${BACKTITLE}" --title "AUTO-UPDATE TIME" --inputbox \
-          "\nDaily update time (HH:MM, 24h).\n\nCancel keeps the default (04:00)." 12 60 "${HAPPIER_PVE_AUTO_UPDATE_AT}" 3>&1 1>&2 2>&3
-      ) || HAPPIER_PVE_AUTO_UPDATE_AT="04:00"
+      while true; do
+        HAPPIER_PVE_AUTO_UPDATE_AT=$(
+          whiptail --backtitle "${BACKTITLE}" --title "AUTO-UPDATE TIME" --inputbox \
+            "\nDaily update time (HH:MM, 24h).\n\nCancel keeps the default (04:00)." 12 60 "${HAPPIER_PVE_AUTO_UPDATE_AT}" 3>&1 1>&2 2>&3
+        ) || HAPPIER_PVE_AUTO_UPDATE_AT="04:00"
+        is_valid_hhmm "${HAPPIER_PVE_AUTO_UPDATE_AT}" && break
+        whiptail --backtitle "${BACKTITLE}" --title "INVALID TIME" --msgbox \
+          "\n'${HAPPIER_PVE_AUTO_UPDATE_AT}' is not a valid HH:MM time (00:00-23:59).\n" 10 60
+      done
     else
       HAPPIER_PVE_AUTO_UPDATE="0"
     fi
+  fi
+  if [[ "${HAPPIER_PVE_AUTO_UPDATE}" == "1" ]] && ! is_valid_hhmm "${HAPPIER_PVE_AUTO_UPDATE_AT}"; then
+    msg_error "Invalid HAPPIER_PVE_AUTO_UPDATE_AT='${HAPPIER_PVE_AUTO_UPDATE_AT}'. Use HH:MM (24h)."
+    exit 1
   fi
 
   if [[ -z "${_preset_channel}" ]]; then
