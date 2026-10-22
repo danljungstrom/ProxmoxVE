@@ -400,7 +400,11 @@ _happier_banner() {
 /_/ /_/\__,_/ .___/ .___/_/\___/_/
            /_/   /_/
 BANNER
-  printf '%s%20s%s%s\n\n' "$(_happier_sgr 8a817c 245)" "" "${HAPPIER_SKIN_BACKTITLE} · https://happier.dev" "${c}"
+  printf '%s%20s%s%s\n' "$(_happier_sgr 8a817c 245)" "" "${HAPPIER_SKIN_BACKTITLE} · https://happier.dev" "${c}"
+  # Two blank lines before the first message. The engine captures the banner
+  # with $(get_header), which strips trailing newlines, so end on an invisible
+  # reset sequence instead (header_info's echo then supplies the last newline).
+  printf '\n%s' "${c}"
 }
 
 # 256-color terminal? (tput may be missing in a minimal container.)
