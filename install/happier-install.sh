@@ -947,7 +947,9 @@ write_daemon_env_dropin() {
   [[ -f "${envfile}" ]] && chmod 600 "${envfile}"
   local wiring_rc=0
   $STD systemctl daemon-reload || wiring_rc=$?
-  $STD systemctl restart "${daemon_unit}" || wiring_rc=$?
+  # try-restart: pick up the env only if the daemon is running. A plain restart
+  # would start it on autostart-off installs (seen live on the 2026-10-22 matrix).
+  $STD systemctl try-restart "${daemon_unit}" || wiring_rc=$?
   if [[ "${wiring_rc}" -eq 0 ]]; then
     msg_ok "Wired daemon environment"
   else

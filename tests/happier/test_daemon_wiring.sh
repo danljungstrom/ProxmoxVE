@@ -51,7 +51,7 @@ test_from_source_stack_unit_gets_dropin() {
   assert_ok "drop-in written for the stack unit" test -f "${conf}"
   assert_ok "claude path wired" grep -q '^Environment="HAPPIER_CLAUDE_PATH=/usr/local/bin/claude"$' "${conf}"
   assert_eq "$(stat -c %a "${conf}")" "600" "drop-in is 600"
-  assert_ok "unit restarted" grep -q '^systemctl restart dev.happier.stack.service$' "${SB}/systemctl.log"
+  assert_ok "unit try-restarted (never started if stopped)" grep -q '^systemctl try-restart dev.happier.stack.service$' "${SB}/systemctl.log"
 }
 
 test_pat_goes_to_root_only_envfile() {
