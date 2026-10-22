@@ -89,6 +89,8 @@ if [[ "${AUTO_UPDATE}" == "1" ]] && ! is_valid_hhmm "${AUTO_UPDATE_AT}"; then
   msg_warn "Invalid HAPPIER_PVE_AUTO_UPDATE_AT='${AUTO_UPDATE_AT}', falling back to 04:00"
   AUTO_UPDATE_AT="04:00"
 fi
+# Where unit files/drop-ins are written (a variable so the helpers are testable).
+SYSTEMD_UNIT_DIR="/etc/systemd/system"
 TAILSCALE_ENABLE_SERVE="0"
 TAILSCALE_HTTPS_URL=""
 TAILSCALE_NEEDS_LOGIN="0"
@@ -898,7 +900,7 @@ write_daemon_env_dropin() {
     return 0
   fi
 
-  dropin_dir="/etc/systemd/system/${daemon_unit}.d"
+  dropin_dir="${SYSTEMD_UNIT_DIR}/${daemon_unit}.d"
   dropin="${dropin_dir}/10-happier-agents.conf"
   # The PAT goes in a separate root-only EnvironmentFile, NOT an Environment= directive:
   # unit Environment= values are exposed to unprivileged users over D-Bus
@@ -952,7 +954,7 @@ AUTO_UPDATE_UNIT="happier-pve-update"
 install_auto_update_timer() {
   [[ "${AUTO_UPDATE}" == "1" ]] || return 0
   msg_info "Enabling daily auto-update (${AUTO_UPDATE_AT})"
-  cat >"/etc/systemd/system/${AUTO_UPDATE_UNIT}.service" <<UNIT
+  cat >"${SYSTEMD_UNIT_DIR}/${AUTO_UPDATE_UNIT}.service" <<UNIT
 [Unit]
 Description=Happier unattended update (Proxmox helper script)
 Wants=network-online.target
@@ -965,7 +967,7 @@ Environment=TERM=dumb
 ExecStart=/usr/bin/update
 TimeoutStartSec=1h
 UNIT
-  cat >"/etc/systemd/system/${AUTO_UPDATE_UNIT}.timer" <<UNIT
+  cat >"${SYSTEMD_UNIT_DIR}/${AUTO_UPDATE_UNIT}.timer" <<UNIT
 [Unit]
 Description=Daily Happier update at ${AUTO_UPDATE_AT}
 
@@ -1320,7 +1322,7 @@ if [[ "${AUTOSTART}" == "1" ]]; then
 
   # hstack currently writes WorkingDirectory=%h for system services.
   # For system units this can resolve to /root; force the explicit happier home.
-  SYSTEMD_UNIT_PATH="/etc/systemd/system/${STACK_LABEL}.service"
+  SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_DIR}/${STACK_LABEL}.service"
   if [[ -f "${SYSTEMD_UNIT_PATH}" ]]; then
     sed -i "s|^WorkingDirectory=.*|WorkingDirectory=${HAPPIER_HOME}|" "${SYSTEMD_UNIT_PATH}"
     if ! grep -q '^User=happier$' "${SYSTEMD_UNIT_PATH}"; then
@@ -1339,7 +1341,7 @@ fi
 if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
   install_devbox_agents
   FROM_SOURCE_DAEMON_UNIT=""
-  if [[ "${AUTOSTART}" == "1" && -f "/etc/systemd/system/${STACK_LABEL}.service" ]]; then
+  if [[ "${AUTOSTART}" == "1" && -f "${SYSTEMD_UNIT_DIR}/${STACK_LABEL}.service" ]]; then
     FROM_SOURCE_DAEMON_UNIT="${STACK_LABEL}.service"
   fi
   write_daemon_env_dropin "${FROM_SOURCE_DAEMON_UNIT}" "sudo -u happier -H ${HSTACK_BIN} start --restart"
