@@ -304,17 +304,23 @@ install_happier_cli() {
 
 # ── Skin ──────────────────────────────────────────────────────────────────────
 # Happier look for the community-scripts/core engine: banner, palette, status
-# icons, spinner and the whiptail title bar. All of it overrides engine
-# INTERNALS (color/icons/color_spinner/get_header and the "Proxmox VE Helper
-# Scripts" backtitle string), which are not a stable API: re-check them on every
-# HAPPIER_CORE_REF bump (tests/happier/test_skin.sh carries an engine-contract
-# test). HAPPIER_PVE_SKIN=0 keeps the stock look. Dev mode keeps the engine's red
-# greens, so a dev run is never mistaken for a normal install.
+# icons, spinner, the whiptail theme/title bar and clearer update-menu wording.
+# All of it overrides engine INTERNALS (color/icons/color_spinner/get_header and
+# the engine's dialog strings), which are not a stable API: re-check them on
+# every HAPPIER_CORE_REF bump (tests/happier/test_skin.sh carries an
+# engine-contract test). HAPPIER_PVE_SKIN=0 keeps the stock look. Dev mode keeps
+# the engine's red greens, so a dev run is never mistaken for a normal install.
+#
+# Colors follow the dark theme of docs.happier.dev: warm near-black surfaces
+# (#131111 / #191717), light text (#efefef), warm gray (#8a817c) and the amber
+# accent (#e0b65a).
 
 HAPPIER_SKIN_BACKTITLE="Happier for Proxmox VE"
 
-# Dialog palette (newt names only; a preset NEWT_COLORS wins).
-HAPPIER_NEWT_COLORS="root=white,black;roottext=brightblue,black;border=blue,black;window=white,black;shadow=,black;title=brightblue,black;button=black,blue;actbutton=white,brightblue;compactbutton=white,black;checkbox=white,black;actcheckbox=black,brightblue;entry=white,black;disentry=gray,black;label=white,black;listbox=white,black;actlistbox=black,brightblue;sellistbox=brightblue,black;actsellistbox=black,brightblue;textbox=white,black;acttextbox=black,brightblue;emptyscale=,black;fullscale=,blue;helpline=white,black"
+# Dialog palettes (a preset NEWT_COLORS wins). newt takes xterm-256 "colorN"
+# names; 8/16-color terminals (e.g. the Linux console) get the named fallback.
+HAPPIER_NEWT_COLORS_256="root=color255,color233;roottext=color245,color233;helpline=color245,color233;shadow=,color232;window=color255,color234;border=color239,color234;title=color179,color234;label=color255,color234;textbox=color255,color234;acttextbox=color233,color179;button=color255,color237;actbutton=color233,color179;compactbutton=color255,color234;checkbox=color255,color234;actcheckbox=color233,color179;entry=color255,color235;disentry=color245,color234;listbox=color255,color234;actlistbox=color233,color179;sellistbox=color179,color234;actsellistbox=color233,color179;emptyscale=,color236;fullscale=,color179"
+HAPPIER_NEWT_COLORS_16="root=white,black;roottext=lightgray,black;helpline=lightgray,black;shadow=,black;window=white,black;border=gray,black;title=yellow,black;label=white,black;textbox=white,black;acttextbox=black,brown;button=white,gray;actbutton=black,brown;compactbutton=white,black;checkbox=white,black;actcheckbox=black,brown;entry=white,black;disentry=gray,black;listbox=white,black;actlistbox=black,brown;sellistbox=yellow,black;actsellistbox=black,brown;emptyscale=,gray;fullscale=,brown"
 
 # One SGR sequence as real ESC bytes (valid under %s, %b and echo -e alike).
 #   $1 = rrggbb, $2 = xterm-256 fallback, $3 = optional leading attrs ("1", "4")
@@ -330,25 +336,24 @@ _happier_sgr() {
   esac
 }
 
-# Happier app tokens: indigo accent (#5C6BC0, lightened for dark terminals) and
-# the iOS-style success/warning/danger colors (#34C759 / #FF9500 / #FF3B30).
 # shellcheck disable=SC2034 # engine globals, read by the engine msg_* helpers
 _happier_palette() {
-  HAPPIER_ACCENT="$(_happier_sgr 7986cb 104 1)"
-  YW="$(_happier_sgr c5cae9 189)"   # in-progress text
-  YWB="$(_happier_sgr ff9500 208)"  # warnings
-  BL="$(_happier_sgr 9fa8da 146)"   # values
-  RD="$(_happier_sgr ff3b30 203 1)" # errors
+  HAPPIER_ACCENT="$(_happier_sgr e0b65a 179 1)"
+  HAPPIER_MUTED="$(_happier_sgr 8a817c 245)"
+  YW="$(_happier_sgr efefef 255)"   # in-progress text
+  YWB="$(_happier_sgr fe9a00 208)"  # warnings
+  BL="$(_happier_sgr efefef 255)"   # values
+  RD="$(_happier_sgr fb2c36 203 1)" # errors
   [[ -n "${dev_mode:-}" ]] && return 0
-  GN="$(_happier_sgr 34c759 77 1)"  # success
-  DGN="$(_happier_sgr 7986cb 104)"  # setting labels
-  BGN="$(_happier_sgr 34c759 77 4)" # setting values
+  GN="$(_happier_sgr 00c951 41 1)"  # success
+  DGN="${HAPPIER_MUTED}"            # setting labels
+  BGN="$(_happier_sgr e0b65a 179)"  # setting values
 }
 
 # Single-width glyphs in the palette instead of the engine's emoji.
 # shellcheck disable=SC2034 # engine globals, read by the engine msg_* helpers
 _happier_icons() {
-  local t="${TAB:-  }" a="${HAPPIER_ACCENT}" c=$'\033[m' name
+  local t="${TAB:-  }" a="${HAPPIER_ACCENT}" m="${HAPPIER_MUTED}" c=$'\033[m' name
   CM="${t}${GN}✔${c}${t}"
   CROSS="${t}${RD}✘${c}${t}"
   DNSOK="${GN}✔${c} "
@@ -357,21 +362,21 @@ _happier_icons() {
   OVERRIDE="${t}${a}⇄${c}${t}"
   CREATING="${t}${a}➜${c}${t}"
   HOURGLASS="${t}${a}◌${c}${t}"
-  VERBOSE_CROPPED="${a}▸${c}${t}"
+  VERBOSE_CROPPED="${m}▸${c}${t}"
   for name in OS OSVERSION CONTAINERTYPE DISKSIZE CPUCORE RAMSIZE SEARCH VERIFYPW \
     CONTAINERID HOSTNAME BRIDGE NETWORK GATEWAY ICON_DISABLEIPV6 DEFAULT \
     MACADDRESS VLANTAG ROOTSSH ADVANCED FUSE GPU; do
-    printf -v "${name}" '%s' "${t}${a}▸${c}${t}"
+    printf -v "${name}" '%s' "${t}${m}▸${c}${t}"
   done
 }
 
 # The banner (figlet "slant", like the engine's generated headers), shaded
-# top-down from light to deep indigo, plus a tagline.
+# top-down from light to deep amber, plus a muted tagline.
 _happier_banner() {
-  local shades=(c5cae9:189 9fa8da:146 7986cb:104 5c6bc0:68 3f51b5:61 3f51b5:61)
+  local shades=(f5d38f:222 f5b547:215 e0b65a:179 c99a3c:178 a87a1f:136 8a5a00:94)
   local c=$'\033[m' i=0 line shade
   while IFS= read -r line; do
-    shade="${shades[i]:-3f51b5:61}"
+    shade="${shades[i]:-8a5a00:94}"
     printf '%s%s%s\n' "$(_happier_sgr "${shade%%:*}" "${shade##*:}" 1)" "${line}" "${c}"
     i=$((i + 1))
   done <<'BANNER'
@@ -382,7 +387,32 @@ _happier_banner() {
 /_/ /_/\__,_/ .___/ .___/_/\___/_/
            /_/   /_/
 BANNER
-  printf '%s  %s%s\n' "$(_happier_sgr 9fa8da 146)" "${HAPPIER_SKIN_BACKTITLE} · https://happier.dev" "${c}"
+  printf '%s  %s%s\n' "$(_happier_sgr 8a817c 245)" "${HAPPIER_SKIN_BACKTITLE} · https://happier.dev" "${c}"
+}
+
+# 256-color terminal? (tput may be missing in a minimal container.)
+_happier_term_256() {
+  [[ -n "${COLORTERM:-}" || "${TERM:-}" == *256color* ]] && return 0
+  local n=0
+  n="$(tput colors 2>/dev/null || echo 0)"
+  [[ "${n}" =~ ^[0-9]+$ ]] && ((n >= 256))
+}
+
+# One engine dialog string in, its Happier wording out. Only applied to the
+# engine's update menu (see the whiptail wrapper): the engine dispatches on the
+# item tags 1/2/3, so only titles, prompt, labels and the box width change.
+_happier_update_menu_arg() {
+  case "$1" in
+  *" LXC Update/Setting") printf '%s' "Update ${APP:-Happier}" ;;
+  "Support/Update functions for "*)
+    printf '%s' "Updates the ${APP:-Happier} CLI and relay in this container. Your settings and data are kept."
+    ;;
+  "YES (Silent Mode)") printf '%s' "Update now" ;;
+  "YES (Verbose Mode)") printf '%s' "Update and show full command output" ;;
+  "NO (Cancel Update)") printf '%s' "Cancel" ;;
+  60) printf '%s' 66 ;; # box width: fits the longest label
+  *) printf '%s' "$1" ;;
+  esac
 }
 
 # Install the skin over the already-loaded engine. Call once, right after this
@@ -404,20 +434,32 @@ happier_apply_skin() {
     _happier_icons
   }
   color_spinner() {
-    CS_YW="$(_happier_sgr c5cae9 189)"
-    CS_YWB="$(_happier_sgr 7986cb 104 1)"
+    CS_YW="$(_happier_sgr efefef 255)"
+    CS_YWB="$(_happier_sgr e0b65a 179 1)"
     CS_CL=$'\033[m'
   }
   get_header() { _happier_banner; }
-  # The engine hardcodes its backtitle in every dialog; rewrite it in flight.
-  # Exit status passes through (Cancel = 1, Esc = 255 drive the engine's flow).
+  # The engine hardcodes its backtitle in every dialog and words its update
+  # menu for all apps alike; rewrite both in flight. Exit status passes through
+  # (Cancel = 1, Esc = 255 drive the engine's flow).
   whiptail() {
-    local args=() arg
+    local args=() arg update_menu=0
     for arg in "$@"; do
-      args+=("${arg//Proxmox VE Helper Scripts/${HAPPIER_SKIN_BACKTITLE}}")
+      [[ "${arg}" == *" LXC Update/Setting" ]] && update_menu=1
+    done
+    for arg in "$@"; do
+      arg="${arg//Proxmox VE Helper Scripts/${HAPPIER_SKIN_BACKTITLE}}"
+      ((update_menu)) && arg="$(_happier_update_menu_arg "${arg}")"
+      args+=("${arg}")
     done
     command whiptail "${args[@]}"
   }
-  export NEWT_COLORS="${NEWT_COLORS:-${HAPPIER_NEWT_COLORS}}"
+  if [[ -z "${NEWT_COLORS:-}" ]]; then
+    if _happier_term_256; then
+      export NEWT_COLORS="${HAPPIER_NEWT_COLORS_256}"
+    else
+      export NEWT_COLORS="${HAPPIER_NEWT_COLORS_16}"
+    fi
+  fi
   color
 }
