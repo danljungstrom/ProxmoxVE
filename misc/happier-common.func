@@ -5,10 +5,10 @@
 # Source: https://happier.dev
 #
 # Shared Happier helpers used by BOTH ct/happier.sh (host-side) and
-# install/happier-install.sh (in-container). It is fetched over the network
-# like build.func and sourced AFTER the framework msg_* helpers are available.
-# It must be sourceable standalone — it depends only on the standard framework
-# msg_* helpers (callers own INSTALLER_REPO/INSTALLER_REF; nothing here reads them).
+# install/happier-install.sh (in-container). It is resolved from the scripts root
+# (COMMUNITY_SCRIPTS_URL or a local checkout) and sourced AFTER the
+# community-scripts/core engine, so the engine msg_* helpers are available. It
+# must be sourceable standalone — it depends only on those msg_* helpers.
 
 # Pinned minisign trust anchor for the Happier UI bundle. Override with
 # HAPPIER_MINISIGN_PUBKEY only if you know what you are doing — doing so

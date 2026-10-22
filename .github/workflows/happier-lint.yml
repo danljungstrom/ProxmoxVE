@@ -1,7 +1,6 @@
-# happier-dev fork: lint/validate the happier helper scripts + the fork's framework patches.
+# happier-dev fork: lint/validate the happier helper scripts.
 # Fork-owned (NOT gated to community-scripts), so it actually runs on this repo's PRs —
-# the upstream script-test/script_format workflows are gated to community-scripts and parked
-# under .github/workflows/bak/, so nothing lints these files without this.
+# upstream has no shellcheck workflow, so nothing lints these files without this.
 # Note: uses no untrusted github.event.* inputs (no injection surface).
 #
 # Tool pinning: shellcheck and shfmt are downloaded as pinned releases with sha256
@@ -15,9 +14,6 @@ on:
       - "ct/happier.sh"
       - "install/happier-install.sh"
       - "misc/happier-common.func"
-      - "misc/build.func"
-      - "misc/core.func"
-      - "misc/install.func"
       - "json/happier.json"
       - "frontend/public/json/happier.json"
       - "tests/happier/**"
@@ -28,9 +24,6 @@ on:
       - "ct/happier.sh"
       - "install/happier-install.sh"
       - "misc/happier-common.func"
-      - "misc/build.func"
-      - "misc/core.func"
-      - "misc/install.func"
       - "json/happier.json"
       - "frontend/public/json/happier.json"
       - "tests/happier/**"
@@ -47,9 +40,6 @@ jobs:
       # they are clean at that level; intentional deviations carry per-line
       # `# shellcheck disable=` directives with an explanation).
       HAPPIER_SCRIPTS: "ct/happier.sh install/happier-install.sh misc/happier-common.func"
-      # Upstream framework files the fork patches — syntax-check only (full shellcheck
-      # would flood with pre-existing upstream findings unrelated to our changes).
-      PATCHED_FUNCS: "misc/build.func misc/core.func misc/install.func"
       SHELLCHECK_VERSION: "v0.11.0"
       SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
       SHFMT_VERSION: "v3.13.1"
@@ -57,10 +47,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: bash -n (syntax) — scripts + patched func files + tests
+      - name: bash -n (syntax) — scripts + tests
         run: |
           rc=0
-          for f in $HAPPIER_SCRIPTS $PATCHED_FUNCS tests/happier/*.sh; do
+          for f in $HAPPIER_SCRIPTS tests/happier/*.sh; do
             if bash -n "$f"; then echo "ok: $f"; else echo "SYNTAX FAIL: $f"; rc=1; fi
           done
           exit $rc
@@ -99,9 +89,8 @@ jobs:
 
       - name: shellcheck (fork-owned files, no excludes)
         run: |
-          # --norc: the repo-root .shellcheckrc carries broad excludes for the
-          # upstream-patched framework files; the fork-owned files are held to the
-          # full ruleset at info severity.
+          # --norc: the repo-root .shellcheckrc carries upstream's broad excludes;
+          # the fork-owned files are held to the full ruleset at info severity.
           rc=0
           for f in $HAPPIER_SCRIPTS tests/happier/*.sh; do
             shellcheck --norc -S info "$f" || rc=1

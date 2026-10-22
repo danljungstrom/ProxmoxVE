@@ -8,11 +8,11 @@
 # shellcheck disable=SC1091 # sourced from a runtime-provided string, not a file
 source /dev/stdin <<<"${FUNCTIONS_FILE_PATH}"
 
-# Shared Happier helpers (channel/UI-bundle/CLI resolvers + pinned minisign key).
-# Fetched and sourced AFTER FUNCTIONS_FILE_PATH so the framework msg_* helpers
-# are available. INSTALLER_REPO/INSTALLER_REF are inherited from build.func via
-# lxc-attach (the shared file also defaults them when sourced standalone).
-HAPPIER_COMMON_FUNC_URL="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/happier-common.func"
+# Shared Happier helpers (channel/CLI resolvers, validators). Fetched from the
+# scripts root the host exported (COMMUNITY_SCRIPTS_URL, which carries the fork +
+# ref) and sourced AFTER FUNCTIONS_FILE_PATH so the engine msg_* helpers exist.
+# Inline rather than a helper: the shared helpers live in the file being fetched.
+HAPPIER_COMMON_FUNC_URL="${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/happier-dev/ProxmoxVE/main}/misc/happier-common.func"
 HAPPIER_COMMON_FUNC="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 "${HAPPIER_COMMON_FUNC_URL}")" || {
   msg_error "Failed to download happier-common.func from: ${HAPPIER_COMMON_FUNC_URL}"
   exit 1
@@ -21,13 +21,10 @@ if [[ -z "${HAPPIER_COMMON_FUNC//[[:space:]]/}" ]]; then
   msg_error "Downloaded happier-common.func is empty: ${HAPPIER_COMMON_FUNC_URL}"
   exit 1
 fi
-# NB: this fetch/empty-check/source block must track ct/happier.sh's
-# fetch_remote_script pattern; it stays inline here (bootstrap chicken-and-egg:
-# the shared helper lives in the file being fetched).
 # shellcheck disable=SC1091 # sourced from a runtime-fetched string, not a file
 source /dev/stdin <<<"${HAPPIER_COMMON_FUNC}"
 
-# Used by community-scripts helpers (e.g. motd_ssh in misc/install.func).
+# Used by the engine helpers (motd_ssh, customize -> /usr/bin/update entrypoint).
 # shellcheck disable=SC2034 # consumed by the sourced framework, not this script
 APP="Happier"
 app="${app:-happier}"
@@ -485,41 +482,6 @@ print_next_steps() {
   fi
 }
 
-# Write the in-container `update` helper. customize() points it at upstream
-# community-scripts; repoint it at this fork. The generated helper reads
-# INSTALLER_REPO/INSTALLER_REF at update time (default happier-dev/ProxmoxVE@main)
-# and threads them through to ct/happier.sh, so a pinned install updates from the
-# SAME ref instead of silently jumping to main. To pin: `INSTALLER_REF=<tag> update`.
-write_update_helper() {
-  # The install-time INSTALLER_REPO/REF are baked in as the DEFAULTS (env still
-  # overrides at update time) — otherwise a pinned install silently updates from
-  # the moving main branch, contradicting the documented pinning contract.
-  cat >/usr/bin/update <<UPDATEEOF
-#!/usr/bin/env bash
-set -euo pipefail
-REPO="\${INSTALLER_REPO:-${INSTALLER_REPO:-happier-dev/ProxmoxVE}}"
-REF="\${INSTALLER_REF:-${INSTALLER_REF:-main}}"
-# Inherit any configured HTTP(S) proxy so \`update\` works on proxied networks
-# (customize() sources this for its own update helper; keep parity here).
-set -a
-[ -f /etc/profile.d/90-http-proxy.sh ] && . /etc/profile.d/90-http-proxy.sh
-set +a
-# Download to a temp file with retries/timeouts, then run it — instead of piping
-# \`curl | bash\`, which has no timeout and can execute a truncated script if the
-# transfer drops mid-stream.
-script="\$(mktemp)"
-trap 'rm -f "\${script}"' EXIT
-curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 \\
-  "https://raw.githubusercontent.com/\${REPO}/\${REF}/ct/happier.sh" -o "\${script}"
-[ -s "\${script}" ] || {
-  echo "update: downloaded ct/happier.sh is empty (nothing to run)" >&2
-  exit 1
-}
-INSTALLER_REPO="\${REPO}" INSTALLER_REF="\${REF}" bash "\${script}"
-UPDATEEOF
-  chmod +x /usr/bin/update
-}
-
 # Shared access-URL epilogue for both install methods (loopback/LAN + proxy +
 # detected Tailscale HTTPS URL). Method-specific tailscale recovery guidance
 # stays at the call sites.
@@ -557,9 +519,12 @@ run_daemon_auth_if_requested() {
 # Shared install tail for both methods, so the ordering cannot drift.
 finish_install() {
   motd_ssh
+  # customize() writes the engine's /usr/bin/update entrypoint, baking in the
+  # COMMUNITY_SCRIPTS_URL this install came from (fork + ref).
   customize
-  # customize() points /usr/bin/update at community-scripts; repoint it at the fork.
-  write_update_helper
+  # The engine's cleanup runs apt autoremove/clean with no lock wait; a late
+  # unattended-upgrades run would make it fail. Wait for the locks first.
+  wait_for_apt_locks
   cleanup_lxc
 }
 

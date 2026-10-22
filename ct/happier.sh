@@ -1,51 +1,37 @@
 #!/usr/bin/env bash
-INSTALLER_REPO="${INSTALLER_REPO:-happier-dev/ProxmoxVE}"
-# Supply chain: build.func is sourced from this ref (community-scripts framework
-# model). It defaults to the moving 'main' branch; for a reproducible/pinned
-# install, export INSTALLER_REF=<tag-or-sha> (the `update` helper honors it too).
-INSTALLER_REF="${INSTALLER_REF:-main}"
-export INSTALLER_REPO INSTALLER_REF
-
-# Download a remote script and print its payload, failing hard on download error
-# or empty body. Reports via msg_error once the framework is sourced (2nd call
-# onward), plain stderr before that. NOTE: callers must `|| exit 1` (the exit here
-# only leaves the command-substitution subshell) and must source the payload at
-# top level, NOT inside a function (sourcing frameworks in a function scope would
-# make their `declare` statements function-local).
-fetch_remote_script() {
-  local url="$1" label="$2"
-  local payload=""
-  payload="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 "${url}")" || {
-    if command -v msg_error >/dev/null 2>&1; then
-      msg_error "Failed to download ${label} from: ${url}"
-    else
-      echo "Failed to download ${label} from: ${url}" >&2
-    fi
-    exit 1
-  }
-  if [[ -z "${payload//[[:space:]]/}" ]]; then
-    if command -v msg_error >/dev/null 2>&1; then
-      msg_error "Downloaded ${label} is empty: ${url}"
-    else
-      echo "Downloaded ${label} is empty: ${url}" >&2
-    fi
-    exit 1
-  fi
-  printf '%s' "${payload}"
-}
-
-BUILD_FUNC_URL="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/build.func"
-BUILD_FUNC="$(fetch_remote_script "${BUILD_FUNC_URL}" "build.func")" || exit 1
-# shellcheck disable=SC1091 # sourced from a runtime-fetched string, not a file
-source /dev/stdin <<<"${BUILD_FUNC}"
-
-# Shared Happier helpers (channel/UI-bundle/CLI resolvers). Fetched and sourced
-# AFTER build.func so the framework msg_* helpers are available.
-HAPPIER_COMMON_FUNC_URL="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/happier-common.func"
-HAPPIER_COMMON_FUNC="$(fetch_remote_script "${HAPPIER_COMMON_FUNC_URL}" "happier-common.func")" || exit 1
-# shellcheck disable=SC1091 # sourced from a runtime-fetched string, not a file
-source /dev/stdin <<<"${HAPPIER_COMMON_FUNC}"
-
+_CS_DEFAULT_URL="https://raw.githubusercontent.com/${INSTALLER_REPO:-happier-dev/ProxmoxVE}/${INSTALLER_REF:-main}"
+# happier-dev fork: boots the community-scripts/core engine like every upstream ct
+# script, with two fork-specific twists:
+# - Scripts root: COMMUNITY_SCRIPTS_URL wins, else INSTALLER_REPO/INSTALLER_REF
+#   (kept for back-compat with existing installs and docs), else happier-dev@main.
+#   The engine bakes the resolved URL (ref included) into /usr/bin/update, so a
+#   pinned install keeps updating from the same ref.
+# - Engine: pinned to a vetted community-scripts/core commit instead of the moving
+#   main branch (supply chain). Bump HAPPIER_CORE_REF deliberately after an LXC
+#   test; HAPPIER_CORE_URL overrides it (e.g. .../community-scripts/core/main).
+#   An inherited COMMUNITY_SCRIPTS_CORE_URL is ignored on purpose: every generated
+#   /usr/bin/update exports one, and honoring it would freeze old containers on
+#   whatever engine they were installed with.
+HAPPIER_CORE_REF="8ae24cef982488de94d1906b1366eee17d28e064"
+COMMUNITY_SCRIPTS_CORE_URL="${HAPPIER_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/${HAPPIER_CORE_REF}}"
+export COMMUNITY_SCRIPTS_CORE_URL
+# Containers installed before the engine move carry the fork's own /usr/bin/update,
+# whose URL is written with unexpanded ${REPO}/${REF}. The engine's update path
+# migrates legacy entrypoints by grepping that URL, which would bake the literal
+# placeholders in. Rewrite it first as the plain legacy one-liner the migration
+# understands (temp file + mv: the old helper may be the script running us).
+if ! command -v pveversion >/dev/null 2>&1 && grep -q 'INSTALLER_REPO' /usr/bin/update 2>/dev/null; then
+  _happier_update_tmp="$(mktemp /usr/bin/.update.XXXXXX 2>/dev/null)" &&
+    printf '#!/usr/bin/env bash\nbash -c "$(curl -fsSL %s/ct/happier.sh)"\n' "${COMMUNITY_SCRIPTS_URL:-${_CS_DEFAULT_URL}}" >"${_happier_update_tmp}" &&
+    chmod +x "${_happier_update_tmp}" && mv -f "${_happier_update_tmp}" /usr/bin/update
+  unset _happier_update_tmp
+fi
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+# shellcheck disable=SC1090 # engine path resolved at runtime (local checkout or pinned URL)
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 "${COMMUNITY_SCRIPTS_CORE_URL}/core/build.func")
+# Shared Happier helpers, resolved from the scripts root (local checkout or
+# COMMUNITY_SCRIPTS_URL) after the engine so the msg_* helpers exist.
+_cs_source_func "misc/happier-common.func"
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: happier-dev
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -59,6 +45,8 @@ var_disk="${var_disk:-32}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
 var_unprivileged="${var_unprivileged:-1}"
+# Every dependency ships arm64 builds, but no arm64 install has been verified yet.
+var_arm64="${var_arm64:-unknown}"
 
 header_info "${APP}"
 variables
