@@ -8,21 +8,25 @@
 # shellcheck disable=SC1091 # sourced from a runtime-provided string, not a file
 source /dev/stdin <<<"${FUNCTIONS_FILE_PATH}"
 
-# Shared Happier helpers (channel/CLI resolvers, validators). Fetched from the
-# scripts root the host exported (COMMUNITY_SCRIPTS_URL, which carries the fork +
-# ref) and sourced AFTER FUNCTIONS_FILE_PATH so the engine msg_* helpers exist.
-# Inline rather than a helper: the shared helpers live in the file being fetched.
-HAPPIER_COMMON_FUNC_URL="${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/happier-dev/ProxmoxVE/main}/misc/happier-common.func"
-HAPPIER_COMMON_FUNC="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 "${HAPPIER_COMMON_FUNC_URL}")" || {
-  msg_error "Failed to download happier-common.func from: ${HAPPIER_COMMON_FUNC_URL}"
-  exit 1
-}
+# Shared Happier helpers (channel/CLI resolvers, validators). The host exports
+# the exact text it sourced (HAPPIER_COMMON_FUNC); fall back to fetching it from
+# the scripts root (COMMUNITY_SCRIPTS_URL carries the fork + ref) when absent.
+# Sourced AFTER FUNCTIONS_FILE_PATH so the engine msg_* helpers exist. Inline
+# rather than a helper: the shared helpers live in the text being loaded.
+if [[ -z "${HAPPIER_COMMON_FUNC:-}" ]]; then
+  HAPPIER_COMMON_FUNC_URL="${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/happier-dev/ProxmoxVE/main}/misc/happier-common.func"
+  HAPPIER_COMMON_FUNC="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 "${HAPPIER_COMMON_FUNC_URL}")" || {
+    msg_error "Failed to download happier-common.func from: ${HAPPIER_COMMON_FUNC_URL}"
+    exit 1
+  }
+fi
 if [[ -z "${HAPPIER_COMMON_FUNC//[[:space:]]/}" ]]; then
-  msg_error "Downloaded happier-common.func is empty: ${HAPPIER_COMMON_FUNC_URL}"
+  msg_error "happier-common.func is empty (host export or ${COMMUNITY_SCRIPTS_URL:-default URL})"
   exit 1
 fi
 # shellcheck disable=SC1091 # sourced from a runtime-fetched string, not a file
 source /dev/stdin <<<"${HAPPIER_COMMON_FUNC}"
+unset HAPPIER_COMMON_FUNC
 
 # Used by the engine helpers (motd_ssh, customize -> /usr/bin/update entrypoint).
 # shellcheck disable=SC2034 # consumed by the sourced framework, not this script

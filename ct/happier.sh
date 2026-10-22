@@ -31,8 +31,18 @@ _cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../cor
 # shellcheck disable=SC1090 # engine path resolved at runtime (local checkout or pinned URL)
 source "$_cs_boot" 2>/dev/null || source <(curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 "${COMMUNITY_SCRIPTS_CORE_URL}/core/build.func")
 # Shared Happier helpers, resolved from the scripts root (local checkout or
-# COMMUNITY_SCRIPTS_URL) after the engine so the msg_* helpers exist.
-_cs_source_func "misc/happier-common.func"
+# COMMUNITY_SCRIPTS_URL) after the engine so the msg_* helpers exist. The same
+# text is exported for the in-container installer (lxc-attach carries the env,
+# like the engine's FUNCTIONS_FILE_PATH), so host and container always run the
+# identical helper version and a local checkout needs no network for it.
+HAPPIER_COMMON_FUNC="$(_cs_fetch_text "misc/happier-common.func")"
+if [[ -z "${HAPPIER_COMMON_FUNC//[[:space:]]/}" ]]; then
+  echo "Failed to load misc/happier-common.func from ${COMMUNITY_SCRIPTS_ROOT:-${COMMUNITY_SCRIPTS_URL}}" >&2
+  exit 1
+fi
+export HAPPIER_COMMON_FUNC
+# shellcheck disable=SC1091 # sourced from a runtime-fetched string, not a file
+source /dev/stdin <<<"${HAPPIER_COMMON_FUNC}"
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: happier-dev
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
