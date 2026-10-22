@@ -370,14 +370,25 @@ _happier_icons() {
   done
 }
 
-# The banner (figlet "slant", like the engine's generated headers), shaded
-# top-down from light to deep amber, plus a muted tagline.
+# The banner: the Happier app icon (rounded square, notch, smile) drawn in
+# half blocks, next to "happier" in figlet "slant" (like the engine's generated
+# headers) shaded from light to deep amber, plus a muted tagline.
 _happier_banner() {
+  local icon=(
+    "▄████    ████▄"
+    "█████▄▄▄▄█████"
+    "██████████████"
+    "██▄▀██████▀▄██"
+    "████▄▄▄▄▄▄████"
+    "▀████████████▀"
+  )
   local shades=(f5d38f:222 f5b547:215 e0b65a:179 c99a3c:178 a87a1f:136 8a5a00:94)
-  local c=$'\033[m' i=0 line shade
+  local ic c=$'\033[m' i=0 line shade
+  ic="$(_happier_sgr efefef 255)"
   while IFS= read -r line; do
     shade="${shades[i]:-8a5a00:94}"
-    printf '%s%s%s\n' "$(_happier_sgr "${shade%%:*}" "${shade##*:}" 1)" "${line}" "${c}"
+    printf '%s%s%s    %s%s%s\n' "${ic}" "${icon[i]:-              }" "${c}" \
+      "$(_happier_sgr "${shade%%:*}" "${shade##*:}" 1)" "${line}" "${c}"
     i=$((i + 1))
   done <<'BANNER'
     __                      _
@@ -387,7 +398,7 @@ _happier_banner() {
 /_/ /_/\__,_/ .___/ .___/_/\___/_/
            /_/   /_/
 BANNER
-  printf '%s  %s%s\n' "$(_happier_sgr 8a817c 245)" "${HAPPIER_SKIN_BACKTITLE} · https://happier.dev" "${c}"
+  printf '%s%18s%s%s\n' "$(_happier_sgr 8a817c 245)" "" "${HAPPIER_SKIN_BACKTITLE} · https://happier.dev" "${c}"
 }
 
 # 256-color terminal? (tput may be missing in a minimal container.)
