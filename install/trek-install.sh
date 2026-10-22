@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://github.com/mauriceboe/TREK
+# Source: https://github.com/liketrek/TREK
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -20,7 +20,7 @@ $STD apt install -y \
 msg_ok "Installed Dependencies"
 
 NODE_VERSION="24" setup_nodejs
-fetch_and_deploy_gh_release "trek" "mauriceboe/TREK" "tarball"
+fetch_and_deploy_gh_release "trek" "liketrek/TREK" "tarball"
 
 msg_info "Setup TREK"
 cd /opt/trek
@@ -55,7 +55,7 @@ msg_ok "Set up TREK Workspace"
 msg_info "Configuring TREK"
 ENCRYPTION_KEY=$(openssl rand -hex 32)
 ADMIN_EMAIL="admin@trek.local"
-ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 16)
+ADMIN_PASSWORD=$(random_password 16)
 cat <<EOF >/opt/trek/server/.env
 NODE_ENV=production
 HOST=0.0.0.0
@@ -78,7 +78,7 @@ msg_info "Creating Service"
 cat <<EOF >/etc/systemd/system/trek.service
 [Unit]
 Description=TREK Travel Planner
-Documentation=https://github.com/mauriceboe/TREK
+Documentation=https://github.com/liketrek/TREK
 After=network-online.target
 Wants=network-online.target
 

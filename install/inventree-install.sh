@@ -16,20 +16,27 @@ update_os
 msg_info "Setting up InvenTree Repository"
 setup_deb822_repo \
   "inventree" \
-  "https://dl.packager.io/srv/inventree/InvenTree/key" \
-  "https://dl.packager.io/srv/deb/inventree/InvenTree/stable/$(get_os_info id)" \
+  "https://go.packager.io/srv/deb/inventree/InvenTree/gpg-key.asc" \
+  "https://go.packager.io/srv/deb/inventree/InvenTree/stable/$(get_os_info id)" \
   "$(get_os_info version)" \
   "main"
 msg_ok "Set up InvenTree Repository"
 
 msg_info "Installing InvenTree (Patience)"
-export SETUP_NO_CALLS=true
-$STD apt install -y inventree
+# The package's postinst walks parent PIDs until it reaches PID 1; under pct exec the chain ends at 0
+# and since 1.6.0 that loops forever, so apt runs as a child of systemd
+$STD systemd-run --wait --pipe --quiet --collect --setenv=SETUP_NO_CALLS=true --setenv=DEBIAN_FRONTEND=noninteractive \
+  apt-get install -y inventree
 msg_ok "Installed InvenTree"
 
 msg_info "Configuring InvenTree"
 if [[ -f /etc/inventree/config.yaml ]]; then
   sed -i "s|site_url:.*|site_url: http://${LOCAL_IP}|" /etc/inventree/config.yaml
+  if ! grep -q "^  engine:" /etc/inventree/config.yaml; then
+    mkdir -p /home/inventree/data
+    chown inventree:inventree /home/inventree/data
+    sed -i "/^database:$/a\\  engine: sqlite3\\n  name: '/home/inventree/data/database.sqlite3'" /etc/inventree/config.yaml
+  fi
 fi
 $STD inventree run invoke update
 msg_ok "Configured InvenTree"

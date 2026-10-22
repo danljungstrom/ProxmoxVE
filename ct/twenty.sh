@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
@@ -39,12 +40,9 @@ function update_script() {
     msg_ok "Stopped Services"
 
     create_backup /opt/twenty/.env \
-                  /opt/twenty/packages/twenty-server/.local-storage
+      /opt/twenty/packages/twenty-server/.local-storage
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "twenty" "twentyhq/twenty" "tarball"
-
-    msg_info "Restoring Configuration"
-    cp /opt/twenty.env.bak /opt/twenty/.env
-    msg_ok "Restored Configuration"
+    restore_backup
 
     msg_info "Building Application"
     cd /opt/twenty
@@ -62,11 +60,10 @@ function update_script() {
     msg_info "Running Database Migrations"
     cd /opt/twenty/packages/twenty-server
     set -a && source /opt/twenty/.env && set +a
-    $STD npx ts-node ./scripts/setup-db.ts
-    $STD npx -y typeorm migration:run -d dist/database/typeorm/core/core.datasource
+    $STD yarn command:prod cache:flush || true
+    $STD yarn command:prod upgrade
+    $STD yarn command:prod cache:flush || true
     msg_ok "Ran Database Migrations"
-
-    restore_backup
 
     msg_info "Starting Services"
     systemctl start twenty-server twenty-worker
@@ -82,5 +79,5 @@ description
 
 msg_ok "Completed Successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:3000${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:3000${CL}"

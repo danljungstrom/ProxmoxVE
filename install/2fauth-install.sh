@@ -36,18 +36,19 @@ sed -i -e "s|^APP_URL=.*|APP_URL=http://$LOCAL_IP|" \
   -e "s|^DB_USERNAME=$|DB_USERNAME=$MARIADB_DB_USER|" \
   -e "s|^DB_PASSWORD=$|DB_PASSWORD=$MARIADB_DB_PASS|" .env
 export COMPOSER_ALLOW_SUPERUSER=1
-$STD composer update --no-plugins --no-scripts
 $STD composer install --no-dev --prefer-dist --no-plugins --no-scripts
 $STD php artisan key:generate --force
 $STD php artisan migrate:refresh
 $STD php artisan passport:install -q -n
 $STD php artisan storage:link
 $STD php artisan config:cache
+$STD php artisan 2fauth:fix-passport-key-permissions
 chown -R www-data: /opt/2fauth
 chmod -R 755 /opt/2fauth
 msg_ok "Setup 2fauth"
 
 msg_info "Configure Service"
+PHP_SOCK=$(get_php_fpm_socket)
 cat <<EOF >/etc/nginx/conf.d/2fauth.conf
 server {
         listen 80;
@@ -66,7 +67,7 @@ server {
         error_page 404 /index.php;
 
         location ~ \.php\$ {
-                fastcgi_pass unix:/var/run/php/php${PHP_VERSION}-fpm.sock;
+                fastcgi_pass unix:${PHP_SOCK};
                 fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
                 include fastcgi_params;
         }

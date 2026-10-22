@@ -28,7 +28,7 @@ fi
 
 msg_info "Setting up Bichon"
 mkdir -p /opt/bichon-data
-BICHON_ENC_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+BICHON_ENC_PASSWORD=$(random_password 32)
 
 cat <<EOF >/opt/bichon/bichon.env
 BICHON_ROOT_DIR=/opt/bichon-data
@@ -60,7 +60,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 systemctl enable -q --now bichon
-msg_info "Created Service"
+msg_ok "Created Service"
 
 motd_ssh
 customize

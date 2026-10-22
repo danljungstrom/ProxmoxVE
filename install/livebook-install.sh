@@ -14,7 +14,7 @@ network_check
 update_os
 
 msg_info "Installing Dependencies"
-$STD apt-get install -y \
+$STD apt install -y \
   build-essential \
   ca-certificates \
   cmake \
@@ -28,23 +28,14 @@ export HOME=/opt/livebook
 $STD adduser --system --group --home /opt/livebook --shell /bin/bash livebook
 msg_ok "Created livebook user"
 
-msg_warn "WARNING: This script will run an external installer from a third-party source (https://elixir-lang.org)."
-msg_warn "The following code is NOT maintained or audited by our repository."
-msg_warn "If you have any doubts or concerns, please review the installer code before proceeding:"
-msg_custom "${TAB3}${GATEWAY}${BGN}${CL}" "\e[1;34m" "→  https://elixir-lang.org/install.sh"
-echo
-read -r -p "${TAB3}Do you want to continue? [y/N]: " CONFIRM
-if [[ ! "$CONFIRM" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-  msg_error "Aborted by user. No changes have been made."
-  exit 10
-fi
+confirm_external_installer "https://elixir-lang.org" "https://elixir-lang.org/install.sh"
 curl -fsSO https://elixir-lang.org/install.sh
 $STD sh install.sh elixir@latest otp@latest
 
 msg_info "Setup Erlang and Elixir"
 ERLANG_VERSION=$(ls /opt/livebook/.elixir-install/installs/otp/ | head -n1)
 ELIXIR_VERSION=$(ls /opt/livebook/.elixir-install/installs/elixir/ | head -n1)
-LIVEBOOK_PASSWORD=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | head -c16)
+LIVEBOOK_PASSWORD=$(random_password 16)
 
 export ERLANG_BIN="/opt/livebook/.elixir-install/installs/otp/$ERLANG_VERSION/bin"
 export ELIXIR_BIN="/opt/livebook/.elixir-install/installs/elixir/$ELIXIR_VERSION/bin"
@@ -67,10 +58,10 @@ export ERLANG_BIN="/opt/livebook/.elixir-install/installs/otp/\${ERLANG_VERSION}
 export ELIXIR_BIN="/opt/livebook/.elixir-install/installs/elixir/\${ELIXIR_VERSION}/bin"
 export PATH="\$ESCRIPTS_BIN:\$ERLANG_BIN:\$ELIXIR_BIN:\$PATH"
 EOF
-{
-  echo "Livebook-Credentials"
-  echo "Livebook Password: $LIVEBOOK_PASSWORD"
-} >>~/livebook.creds
+cat <<EOF >~/livebook.creds
+Livebook-Credentials
+Livebook Password: $LIVEBOOK_PASSWORD
+EOF
 msg_ok "Installed Erlang $ERLANG_VERSION and Elixir $ELIXIR_VERSION"
 
 msg_info "Installing Livebook"

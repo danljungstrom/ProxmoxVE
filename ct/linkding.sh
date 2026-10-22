@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (MickLesk)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -30,24 +31,28 @@ function update_script() {
     exit
   fi
 
+  if grep -q 'alias /opt/linkding/static/;' /etc/nginx/sites-available/linkding 2>/dev/null; then
+    msg_info "Serving Favicons and Preview Images"
+    sed -i \
+      -e 's|location /static/ {|location ~ ^/static/(.*)$ {|' \
+      -e 's|alias /opt/linkding/static/;|root /opt/linkding;\n        try_files /static/$1 /data/favicons/$1 /data/previews/$1 =404;\n        add_header Content-Security-Policy "sandbox";|' \
+      /etc/nginx/sites-available/linkding
+    $STD systemctl reload nginx
+    msg_ok "Serving Favicons and Preview Images"
+  fi
+
   if check_for_gh_release "linkding" "sissbruecker/linkding"; then
     msg_info "Stopping Services"
     systemctl stop nginx linkding linkding-tasks
     msg_ok "Stopped Services"
 
-    msg_info "Backing up Data"
-    cp -r /opt/linkding/data /opt/linkding_data_backup
-    cp /opt/linkding/.env /opt/linkding_env_backup
-    msg_ok "Backed up Data"
+    create_backup /opt/linkding/data /opt/linkding/.env
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "linkding" "sissbruecker/linkding" "tarball"
+    UV_PROJECT_DIR="/opt/linkding" setup_uv
 
-    msg_info "Restoring Data"
-    cp -r /opt/linkding_data_backup/. /opt/linkding/data
-    cp /opt/linkding_env_backup /opt/linkding/.env
-    rm -rf /opt/linkding_data_backup /opt/linkding_env_backup
+    restore_backup
     ln -sf /usr/lib/$(arch_resolve "x86_64-linux-gnu" "aarch64-linux-gnu")/mod_icu.so /opt/linkding/libicu.so
-    msg_ok "Restored Data"
 
     msg_info "Updating LinkDing"
     cd /opt/linkding

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -35,19 +36,11 @@ function update_script() {
     systemctl stop caddy
     msg_ok "Stopped Services"
 
-    msg_info "Backing up Data"
-    cp /opt/invoiceshelf/.env /opt/invoiceshelf.env.bak
-    cp -r /opt/invoiceshelf/storage /opt/invoiceshelf_storage_backup
-    msg_ok "Backed up Data"
+    create_backup /opt/invoiceshelf/.env
 
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "invoiceshelf" "InvoiceShelf/InvoiceShelf" "tarball"
+    CLEAN_INSTALL=1 CLEAN_INSTALL_KEEP="storage" fetch_and_deploy_gh_release "invoiceshelf" "InvoiceShelf/InvoiceShelf" "tarball"
 
-    msg_info "Restoring Data"
-    cp /opt/invoiceshelf.env.bak /opt/invoiceshelf/.env
-    rm -f /opt/invoiceshelf.env.bak
-    cp -r /opt/invoiceshelf_storage_backup/. /opt/invoiceshelf/storage
-    rm -rf /opt/invoiceshelf_storage_backup
-    msg_ok "Restored Data"
+    restore_backup
 
     msg_info "Updating Application"
     cd /opt/invoiceshelf
@@ -60,6 +53,7 @@ function update_script() {
       $STD pnpm run build
     fi
     $STD php artisan migrate --force
+    $STD php artisan storage:link
     $STD php artisan optimize:clear
     chown -R www-data:www-data /opt/invoiceshelf
     msg_ok "Updated Application"

@@ -20,6 +20,11 @@ $STD apt install -y \
   potrace \
   libopenjp2-tools \
   libegl1 \
+  libgl1 \
+  libglib2.0-0 \
+  libsm6 \
+  libxext6 \
+  libxrender1 \
   libwayland-client0 \
   libwayland-cursor0 \
   libwayland-egl1 \
@@ -29,11 +34,29 @@ $STD apt install -y \
   python3 \
   python3-dev \
   gcc \
-  g++
+  g++ \
+  libavif-bin \
+  libavif-dev \
+  libopencv-dev \
+  python3-opencv \
+  libgles2
 msg_ok "Installed Dependencies"
 
 PYTHON_VERSION="3.11" setup_uv
 NODE_VERSION="22" NODE_MODULE="pnpm" setup_nodejs
+PG_VERSION="17" setup_postgresql
+PG_DB_NAME="snapotter" PG_DB_USER="snapotter" setup_postgresql_db
+
+msg_info "Installing Redis"
+$STD apt install -y redis-server
+if grep -q '^appendonly ' /etc/redis/redis.conf; then
+  sed -i 's/^appendonly .*/appendonly yes/' /etc/redis/redis.conf
+else
+  echo 'appendonly yes' >>/etc/redis/redis.conf
+fi
+$STD systemctl enable --now redis-server
+msg_ok "Installed Redis"
+
 fetch_and_deploy_gh_release "caire" "esimov/caire" "prebuild" "latest" "/usr/local/bin" "caire-*-linux-amd64.tar.gz"
 fetch_and_deploy_gh_release "snapotter" "snapotter-hq/SnapOtter" "prebuild" "latest" "/opt/snapotter" "snapotter-*-linux-amd64.tar.gz"
 
@@ -41,11 +64,13 @@ msg_info "Setting up Python Environment"
 mkdir -p /opt/snapotter_data/ai/models/rembg
 $STD uv python install 3.11
 $STD uv venv --seed --python 3.11 /opt/snapotter_data/ai/venv
-#if [[ -f /opt/snapotter/packages/ai/python/requirements.txt ]]; then
-#  $STD uv pip install \
-#    --python /opt/snapotter_data/ai/venv/bin/python \
-#    -r /opt/snapotter/packages/ai/python/requirements.txt
-#fi
+if [[ "$(arch_resolve)" == "arm64" ]]; then
+  $STD uv pip install --python /opt/snapotter_data/ai/venv/bin/python \
+    numpy==1.26.4 Pillow==12.3.0 opencv-python-headless==4.10.0.84 fonttools \
+    'huggingface-hub[hf_xet,hf_transfer]==0.36.2'
+else
+  msg_warn "SnapOtter AI Features have no working CPU-only bundle for amd64 upstream (published bundle is Python 3.12/GPU-CUDA only). Use the official Docker image instead: https://docs.snapotter.com"
+fi
 ln -sfn /opt/snapotter /app
 msg_ok "Set up Python Environment"
 
@@ -56,7 +81,8 @@ mkdir -p /tmp/snapotter-workspace
 cat <<EOF >/opt/snapotter_data/.env
 PORT=1349
 NODE_ENV=production
-DB_PATH=/opt/snapotter_data/snapotter.db
+DATABASE_URL=postgres://${PG_DB_USER}:${PG_DB_PASS}@127.0.0.1:5432/${PG_DB_NAME}
+REDIS_URL=redis://127.0.0.1:6379
 WORKSPACE_PATH=/tmp/snapotter-workspace
 FILES_STORAGE_PATH=/opt/snapotter_data/files
 PYTHON_VENV_PATH=/opt/snapotter_data/ai/venv
@@ -80,7 +106,9 @@ PNPM_BIN="$(command -v pnpm)"
 cat <<EOF >/etc/systemd/system/snapotter.service
 [Unit]
 Description=SnapOtter Service
-After=network.target
+Wants=network-online.target
+After=network-online.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
 
 [Service]
 Type=simple

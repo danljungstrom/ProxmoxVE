@@ -23,7 +23,7 @@ RD="\033[01;31m"
 CL="\033[m"
 
 # Telemetry
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
+source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/api/api.func") 2>/dev/null || true
 declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "kernel-clean" "pve"
 
 # Detect current kernel
@@ -55,12 +55,23 @@ read -r selected
 selected_indices=()
 IFS=',' read -r -a tokens <<<"$selected"
 for token in "${tokens[@]}"; do
+  # Strip surrounding whitespace and skip empty tokens
+  token="${token//[[:space:]]/}"
+  [ -z "$token" ] && continue
   if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-    for ((i = BASH_REMATCH[1]; i <= BASH_REMATCH[2]; i++)); do
+    start=${BASH_REMATCH[1]}
+    end=${BASH_REMATCH[2]}
+    if ((start > end)); then
+      echo -e "${RD}Ignoring invalid range '${token}' (start greater than end).${CL}"
+      continue
+    fi
+    for ((i = start; i <= end; i++)); do
       selected_indices+=("$i")
     done
-  else
+  elif [[ "$token" =~ ^[0-9]+$ ]]; then
     selected_indices+=("$token")
+  else
+    echo -e "${RD}Ignoring invalid selection '${token}'.${CL}"
   fi
 done
 
@@ -101,8 +112,7 @@ for kernel in "${kernels_to_remove[@]}"; do
     remaining=$(dpkg --list |
       awk '/^ii/ {print $2}' |
       grep -E "^proxmox-kernel-${minor_version}\." |
-      grep -v "^${kernel}$" |
-      wc -l)
+      grep -cv "^${kernel}$")
     if [ "$remaining" -eq 0 ]; then
       pkgs_to_remove+=("$meta")
     fi

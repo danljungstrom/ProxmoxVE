@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: Stephen Chin (steveonjava)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -30,16 +31,7 @@ function update_script() {
     exit
   fi
 
-  msg_warn "WARNING: This script will run an external installer from a third-party source (https://hermes-agent.nousresearch.com/)."
-  msg_warn "The following code is NOT maintained or audited by our repository."
-  msg_warn "If you have any doubts or concerns, please review the installer code before proceeding:"
-  msg_custom "${TAB3}${GATEWAY}${BGN}${CL}" "\e[1;34m" "→  hermes update (https://hermes-agent.nousresearch.com/)"
-  echo
-  read -r -p "${TAB3}Do you want to continue? [y/N]: " CONFIRM
-  if [[ ! "$CONFIRM" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-    msg_error "Aborted by user. No changes have been made."
-    exit 10
-  fi
+  confirm_external_installer "https://hermes-agent.nousresearch.com/" "hermes update (https://hermes-agent.nousresearch.com/)"
 
   msg_info "Stopping Services"
   systemctl stop hermes-dashboard
@@ -50,7 +42,23 @@ function update_script() {
     set -a; source /etc/default/hermes; set +a
     /home/hermes/.local/bin/hermes update --yes
   '
-  chown -R hermes:hermes /home/hermes
+  mapfile -t root_gateway_pids < <(ps -eo user=,pid=,args= | awk '$1 == "root" && /\/home\/hermes\/\.hermes\// && /hermes_cli[.]main/ && / gateway run --replace$/ { print $2 }')
+  if ((${#root_gateway_pids[@]})); then
+    kill -TERM "${root_gateway_pids[@]}"
+    for pid in "${root_gateway_pids[@]}"; do
+      while kill -0 "$pid" 2>/dev/null; do
+        sleep 0.1
+      done
+    done
+  fi
+  if ps -eo user=,args= | awk '$1 == "root" && /\/home\/hermes\/\.hermes\// { found = 1 } END { exit !found }'; then
+    msg_warn "A root-owned Hermes process is still running; it may keep writing root-owned files"
+  fi
+  # A writer racing chown makes files vanish between readdir and chown; one retry covers it.
+  if ! chown -R hermes:hermes /home/hermes 2>/dev/null; then
+    sleep 1
+    chown -R hermes:hermes /home/hermes || msg_warn "Could not take ownership of everything under /home/hermes"
+  fi
   msg_ok "Updated Hermes Agent"
 
   msg_info "Starting Services"

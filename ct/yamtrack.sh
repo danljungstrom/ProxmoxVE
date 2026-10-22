@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
@@ -36,21 +37,17 @@ function update_script() {
     systemctl stop yamtrack yamtrack-celery
     msg_ok "Stopped Services"
 
-    msg_info "Backing up Data"
-    cp /opt/yamtrack/src/.env /opt/yamtrack_env.bak
-    msg_ok "Backed up Data"
+    create_backup /opt/yamtrack/src/.env
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "yamtrack" "FuzzyGrim/Yamtrack" "tarball"
+    PYTHON_VERSION="3.12" UV_PROJECT_DIR="/opt/yamtrack" setup_uv
+
+    restore_backup
 
     msg_info "Installing Python Dependencies"
     cd /opt/yamtrack
     $STD uv sync --locked
     msg_ok "Installed Python Dependencies"
-
-    msg_info "Restoring Data"
-    cp /opt/yamtrack_env.bak /opt/yamtrack/src/.env
-    rm -f /opt/yamtrack_env.bak
-    msg_ok "Restored Data"
 
     msg_info "Updating Yamtrack"
     cd /opt/yamtrack/src

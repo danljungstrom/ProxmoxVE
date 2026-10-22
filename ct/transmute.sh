@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -40,12 +41,11 @@ function update_script() {
     systemctl stop transmute
     msg_ok "Stopped Service"
 
-    msg_info "Backing up Data"
-    cp /opt/transmute/backend/.env /opt/transmute.env.bak
-    cp -r /opt/transmute/data /opt/transmute_data_bak
-    msg_ok "Backed up Data"
+    create_backup /opt/transmute/backend/.env
 
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "transmute" "transmute-app/transmute" "tarball"
+    CLEAN_INSTALL=1 CLEAN_INSTALL_KEEP="data" fetch_and_deploy_gh_release "transmute" "transmute-app/transmute" "tarball"
+
+    restore_backup
 
     msg_info "Updating Python Dependencies"
     cd /opt/transmute
@@ -59,12 +59,6 @@ function update_script() {
     $STD npm run build
     msg_ok "Rebuilt Frontend"
 
-    msg_info "Restoring Data"
-    cp /opt/transmute.env.bak /opt/transmute/backend/.env
-    cp -r /opt/transmute_data_bak/. /opt/transmute/data/
-    rm -f /opt/transmute.env.bak
-    rm -rf /opt/transmute_data_bak
-    msg_ok "Restored Data"
 
     msg_info "Starting Service"
     systemctl start transmute

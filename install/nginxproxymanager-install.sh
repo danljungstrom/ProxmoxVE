@@ -18,7 +18,7 @@ $STD apt install -y \
   apache2-utils \
   logrotate \
   build-essential \
-  libpcre3-dev \
+  libpcre2-dev \
   libssl-dev \
   zlib1g-dev \
   git \
@@ -36,7 +36,8 @@ $STD /opt/certbot/bin/pip install certbot certbot-dns-cloudflare
 ln -sf /opt/certbot/bin/certbot /usr/local/bin/certbot
 msg_ok "Set up Certbot"
 
-fetch_and_deploy_gh_release "openresty" "openresty/openresty" "prebuild" "latest" "/opt/openresty" "openresty-*.tar.gz"
+OPENRESTY_VERSION="1.29.2.5"
+fetch_and_deploy_from_url "https://openresty.org/download/openresty-${OPENRESTY_VERSION}.tar.gz" "/opt/openresty"
 
 msg_info "Building OpenResty"
 cd /opt/openresty
@@ -52,6 +53,7 @@ $STD ./configure \
   --with-stream_ssl_module
 $STD make -j"$(nproc)"
 $STD make install
+echo "${OPENRESTY_VERSION}" >~/.openresty
 rm -rf /opt/openresty
 
 cat <<'EOF' >/lib/systemd/system/openresty.service
@@ -94,6 +96,9 @@ cp /opt/nginxproxymanager/docker/rootfs/etc/letsencrypt.ini /etc/letsencrypt.ini
 cp /opt/nginxproxymanager/docker/rootfs/etc/logrotate.d/nginx-proxy-manager /etc/logrotate.d/nginx-proxy-manager
 ln -sf /etc/nginx/nginx.conf /etc/nginx/conf/nginx.conf
 rm -f /etc/nginx/conf.d/dev.conf
+if [[ -f /etc/nginx/conf.d/production.conf.template ]]; then
+  sed 's/{{NPM_ADMIN_PORT}}/81/g' /etc/nginx/conf.d/production.conf.template >/etc/nginx/conf.d/production.conf
+fi
 
 mkdir -p /tmp/nginx/body \
   /run/nginx \
@@ -133,6 +138,7 @@ sed -E -i 's/"node-sass" *: *"([^"]*)"/"sass": "\1"/g' package.json
 $STD yarn install --network-timeout 600000
 $STD yarn locale-compile
 $STD yarn build
+$STD yarn cache clean
 cp -r /opt/nginxproxymanager/frontend/dist/* /app/frontend
 cp -r /opt/nginxproxymanager/frontend/public/images/* /app/frontend/images
 msg_ok "Built Frontend"
@@ -157,6 +163,7 @@ EOF
 fi
 cd /app
 $STD yarn install --network-timeout 600000
+$STD yarn cache clean
 msg_ok "Initialized Backend"
 
 msg_info "Creating Service"

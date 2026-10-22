@@ -45,7 +45,7 @@ msg_error() {
 }
 
 # Telemetry
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
+source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/api/api.func") 2>/dev/null || true
 declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "pbs3-upgrade" "pve"
 
 start_routines() {
@@ -105,7 +105,7 @@ EOF
   yes)
     msg_info "Enabling 'pbs-no-subscription' repository"
     cat <<EOF >/etc/apt/sources.list.d/pbs-install-repo.list
-deb https://download.proxmox.com/debian/pbs bookworm pbs-no-subscription
+deb http://download.proxmox.com/debian/pbs bookworm pbs-no-subscription
 EOF
     msg_ok "Enabled 'pbs-no-subscription' repository"
     ;;

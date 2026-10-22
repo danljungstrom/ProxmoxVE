@@ -26,15 +26,15 @@ NODE_VERSION="24" setup_nodejs
 
 msg_info "Setting up Database"
 PG_DB_NAME="ghostfolio" PG_DB_USER="ghostfolio" PG_DB_SCHEMA_PERMS="true" setup_postgresql_db
-REDIS_PASS=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | head -c13)
+REDIS_PASS=$(random_password 13)
 ACCESS_TOKEN_SALT=$(openssl rand -base64 32)
 JWT_SECRET_KEY=$(openssl rand -base64 32)
-{
-  echo "Ghostfolio Credentials"
-  echo "Redis Password: $REDIS_PASS"
-  echo "Access Token Salt: $ACCESS_TOKEN_SALT"
-  echo "JWT Secret Key: $JWT_SECRET_KEY"
-} >>~/ghostfolio.creds
+cat <<EOF >~/ghostfolio.creds
+Ghostfolio Credentials
+Redis Password: $REDIS_PASS
+Access Token Salt: $ACCESS_TOKEN_SALT
+JWT Secret Key: $JWT_SECRET_KEY
+EOF
 msg_ok "Set up Database"
 
 fetch_and_deploy_gh_release "ghostfolio" "ghostfolio/ghostfolio" "tarball" "latest" "/opt/ghostfolio"

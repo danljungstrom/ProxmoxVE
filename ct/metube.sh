@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (Canbiz)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -48,14 +49,12 @@ function update_script() {
     systemctl stop metube
     msg_ok "Stopped Service"
 
-    msg_info "Backing up Old Installation"
-    if [[ -d /opt/metube_bak ]]; then
-      rm -rf /opt/metube_bak
-    fi
-    mv /opt/metube /opt/metube_bak
-    msg_ok "Backup created"
+    create_backup /opt/metube/.env
 
-    fetch_and_deploy_gh_release "metube" "alexta69/metube" "tarball" "latest"
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "metube" "alexta69/metube" "tarball" "latest"
+    UV_PROJECT_DIR="/opt/metube" setup_uv
+
+    restore_backup
 
     msg_info "Building Frontend"
     cd /opt/metube/ui
@@ -74,13 +73,6 @@ function update_script() {
     cd /opt/metube
     $STD uv sync
     msg_ok "Installed Backend"
-
-    msg_info "Restoring .env"
-    if [[ -f /opt/metube_bak/.env ]]; then
-      cp /opt/metube_bak/.env /opt/metube/.env
-    fi
-    rm -rf /opt/metube_bak
-    msg_ok "Restored .env"
 
     if grep -q 'pipenv' /etc/systemd/system/metube.service; then
       msg_info "Patching systemd Service"
