@@ -74,7 +74,7 @@ HAPPIER_CHANNEL_RAW="${HAPPIER_PVE_CHANNEL:-${HAPPIER_PVE_HSTACK_CHANNEL:-stable
 STACK_PACKAGE_RAW="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}"   # e.g. @happier-dev/stack@latest
 SERVER_PORT_RAW="${HAPPIER_PVE_SERVER_PORT:-}"                                      # optional explicit PORT override
 INSTALL_AGENTS="${HAPPIER_PVE_INSTALL_AGENTS:-1}"                                   # 1 | 0 (install claude+codex on devbox)
-DAEMON_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"                                     # optional daemon GITHUB_PERSONAL_ACCESS_TOKEN
+DAEMON_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"                                     # optional daemon GH_TOKEN (+ GITHUB_PERSONAL_ACCESS_TOKEN)
 AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"                                         # 1 | 0 (daily `update` systemd timer; installers only)
 AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"                               # HH:MM for the auto-update timer
 # Secrets hygiene: the PAT and Tailscale key now live in locals. Drop the exported
@@ -766,10 +766,15 @@ install_devbox_background_service() {
   # the unit run as happier). The CLI's post-install "daemon became active" check
   # cannot pass before auth (WAIT_FOR_AUTH), so a non-zero exit here is expected —
   # treat it as success when the unit actually got installed.
+  # Autostart off still gets the unit (`--no-autostart` = on-demand, not enabled
+  # at boot): the env drop-in needs something to attach to, and starting the
+  # daemon later is then a plain `systemctl start`.
+  local svc_args=(--server proxmox service install --mode system --system-user happier --yes)
+  [[ "${AUTOSTART}" == "1" ]] || svc_args+=(--no-autostart)
   local svc_rc=0
   HOME="/home/happier" \
     HAPPIER_HOME_DIR="/home/happier/.happier" \
-    $STD "${HAPPIER_CLI_BIN}" --server proxmox service install --mode system --system-user happier --yes </dev/null || svc_rc=$?
+    $STD "${HAPPIER_CLI_BIN}" "${svc_args[@]}" </dev/null || svc_rc=$?
   if [[ "${svc_rc}" -ne 0 ]]; then
     if [[ -n "$(find_happier_daemon_unit)" ]]; then
       msg_warn "Background service installed; daemon stays inactive until authenticated (CLI activation check rc=${svc_rc})."
@@ -809,8 +814,10 @@ ensure_relay_host_installed() {
 #   recommended method (Anthropic warns against root npm globals, and a root-owned
 #   global dir would break claude's self-update for the happier user). Lands in
 #   ~happier/.local/bin/claude, which the installer wires onto the user's PATH.
-# - codex: npm global install (the vendor-documented method). Node 24 is installed
-#   on demand for it — the installers path doesn't bring Node (from_source does).
+# - codex: on the installers path via `happier install provider codex` (a managed,
+#   checksum-pinned GitHub-release binary in the happier user's Happier home, which
+#   the daemon discovers on its own; no Node needed). from_source already has
+#   Node, so it keeps the pinned npm global install.
 # Non-fatal throughout: a failure still lets the daemon be wired to a later manual install.
 install_devbox_agents() {
   if [[ "${INSTALL_AGENTS}" != "1" ]]; then
@@ -826,17 +833,16 @@ install_devbox_agents() {
     msg_warn "claude install failed (non-fatal) — later, as the happier user: curl -fsSL https://claude.ai/install.sh | bash"
   fi
 
-  if ! command -v npm >/dev/null 2>&1; then
-    msg_info "Installing Node.js (required for codex)"
-    # Guarded: setup_nodejs returns non-zero on apt/repo failures and would otherwise
-    # abort the whole install via the ERR trap, contradicting the non-fatal contract.
-    if NODE_VERSION="24" setup_nodejs; then
-      msg_ok "Installed Node.js"
+  if [[ "${INSTALL_METHOD}" == "installers" ]]; then
+    msg_info "Installing codex (Happier managed provider install, as happier)"
+    if $STD sudo -u happier -H "${HAPPIER_CLI_BIN}" install provider codex </dev/null; then
+      msg_ok "Installed codex"
     else
-      msg_warn "Node.js install failed (non-fatal) — skipping codex install"
-      return 0
+      msg_warn "codex install failed (non-fatal) — later: sudo -u happier -H ${HAPPIER_CLI_NAME} install provider codex"
     fi
+    return 0
   fi
+
   if ! command -v npm >/dev/null 2>&1; then
     msg_warn "npm not available; skipping codex install"
     return 0
@@ -888,7 +894,7 @@ write_daemon_env_dropin() {
     msg_warn "No daemon systemd unit (autostart off) — set the daemon env yourself before starting it with: ${manual_start_cmd}"
     if [[ -n "${claude_path}" ]]; then echo "    export HAPPIER_CLAUDE_PATH=${claude_path}"; fi
     if [[ -n "${codex_path}" ]]; then echo "    export HAPPIER_CODEX_PATH=${codex_path}"; fi
-    if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then echo "    export GITHUB_PERSONAL_ACCESS_TOKEN=<the token you provided>"; fi
+    if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then echo "    export GH_TOKEN=<the token you provided> GITHUB_PERSONAL_ACCESS_TOKEN=<the same token>"; fi
     return 0
   fi
 
@@ -913,7 +919,9 @@ write_daemon_env_dropin() {
       if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then printf 'EnvironmentFile=%s\n' "${envfile}"; fi
     } >"${dropin}" || exit 1
     if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then
-      printf 'GITHUB_PERSONAL_ACCESS_TOKEN=%s\n' "${DAEMON_GITHUB_PAT}" >"${envfile}" || exit 1
+      # GH_TOKEN is what Happier and gh read; GITHUB_PERSONAL_ACCESS_TOKEN is kept
+      # for agent MCP configs that expect it.
+      printf 'GITHUB_PERSONAL_ACCESS_TOKEN=%s\nGH_TOKEN=%s\n' "${DAEMON_GITHUB_PAT}" "${DAEMON_GITHUB_PAT}" >"${envfile}" || exit 1
     else
       rm -f "${envfile}"
     fi
@@ -1054,12 +1062,14 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
     install_devbox_cli_compat_wrapper
     configure_devbox_server_profile
 
-    if [[ "${AUTOSTART}" == "1" ]]; then
-      install_devbox_background_service
-      ensure_relay_host_installed
-    else
-      msg_info "Autostart disabled: skipping background service install"
-      msg_ok "Background service skipped"
+    install_devbox_background_service
+    ensure_relay_host_installed
+    if [[ "${AUTOSTART}" != "1" ]]; then
+      # The service install / relay reconcile may have (re)started units; honor
+      # the autostart-off choice: installed, not enabled, not running.
+      DAEMON_UNIT="$(find_happier_daemon_unit)"
+      systemctl disable -q --now "$(channel_relay_service_name "${HAPPIER_CHANNEL}")" >/dev/null 2>&1 || true
+      [[ -n "${DAEMON_UNIT}" ]] && { systemctl disable -q --now "${DAEMON_UNIT}" >/dev/null 2>&1 || true; }
     fi
 
     install_devbox_agents
@@ -1076,6 +1086,9 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   run_daemon_auth_if_requested "${RELAY_SERVICE_NAME}" "${HAPPIER_CLI_BIN}" auth login --method=mobile --no-open
 
   print_access_urls
+  # The relay generates a master secret on first start that encrypts what it
+  # stores; it exists nowhere else and cannot be regenerated.
+  echo -e "${INFO}${YW} Backup:${CL} keep $(channel_data_dir "${HAPPIER_CHANNEL}") (relay database + its master secret, which cannot be regenerated) in your backups."
   if [[ -z "${TAILSCALE_HTTPS_URL}" && "${REMOTE_ACCESS}" == "tailscale" ]]; then
     echo -e "${INFO}${YW} Tailscale:${CL} enroll it inside the container, then enable Serve:"
     # Surface the login URL the shared enroller captured (the from_source epilogue
@@ -1100,7 +1113,12 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   if [[ "${INSTALL_TYPE}" == "devbox" && "${AUTOSTART}" != "1" ]]; then
     # With autostart on, the managed service starts the daemon automatically once
     # authenticated (HAPPIER_DAEMON_WAIT_FOR_AUTH); only show a manual start otherwise.
-    DAEMON_START_CMD="sudo -u happier -H ${CLIENT_CLI_NAME} daemon start"
+    DAEMON_UNIT="$(find_happier_daemon_unit)"
+    if [[ -n "${DAEMON_UNIT}" ]]; then
+      DAEMON_START_CMD="systemctl start ${DAEMON_UNIT}"
+    else
+      DAEMON_START_CMD="sudo -u happier -H ${CLIENT_CLI_NAME} daemon start"
+    fi
   fi
   print_next_steps \
     "sudo -u happier -H ${CLIENT_CLI_NAME} auth login" \
