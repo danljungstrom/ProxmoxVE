@@ -27,6 +27,7 @@ fi
 # shellcheck disable=SC1091 # sourced from a runtime-fetched string, not a file
 source /dev/stdin <<<"${HAPPIER_COMMON_FUNC}"
 unset HAPPIER_COMMON_FUNC
+happier_apply_skin
 
 # Used by the engine helpers (motd_ssh, customize -> /usr/bin/update entrypoint).
 # shellcheck disable=SC2034 # consumed by the sourced framework, not this script

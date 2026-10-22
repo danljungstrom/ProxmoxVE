@@ -301,3 +301,123 @@ install_happier_cli() {
   chmod 755 "${HAPPIER_CLI_INSTALL_DIR}" 2>/dev/null || true
   return "${rc}"
 }
+
+# ── Skin ──────────────────────────────────────────────────────────────────────
+# Happier look for the community-scripts/core engine: banner, palette, status
+# icons, spinner and the whiptail title bar. All of it overrides engine
+# INTERNALS (color/icons/color_spinner/get_header and the "Proxmox VE Helper
+# Scripts" backtitle string), which are not a stable API: re-check them on every
+# HAPPIER_CORE_REF bump (tests/happier/test_skin.sh carries an engine-contract
+# test). HAPPIER_PVE_SKIN=0 keeps the stock look. Dev mode keeps the engine's red
+# greens, so a dev run is never mistaken for a normal install.
+
+HAPPIER_SKIN_BACKTITLE="Happier for Proxmox VE"
+
+# Dialog palette (newt names only; a preset NEWT_COLORS wins).
+HAPPIER_NEWT_COLORS="root=white,black;roottext=brightblue,black;border=blue,black;window=white,black;shadow=,black;title=brightblue,black;button=black,blue;actbutton=white,brightblue;compactbutton=white,black;checkbox=white,black;actcheckbox=black,brightblue;entry=white,black;disentry=gray,black;label=white,black;listbox=white,black;actlistbox=black,brightblue;sellistbox=brightblue,black;actsellistbox=black,brightblue;textbox=white,black;acttextbox=black,brightblue;emptyscale=,black;fullscale=,blue;helpline=white,black"
+
+# One SGR sequence as real ESC bytes (valid under %s, %b and echo -e alike).
+#   $1 = rrggbb, $2 = xterm-256 fallback, $3 = optional leading attrs ("1", "4")
+# Truecolor only when the terminal says so: SSH does not forward COLORTERM, so
+# most PVE shells get the 256-color approximation.
+_happier_sgr() {
+  local attrs="${3:+$3;}"
+  case "${COLORTERM:-}" in
+  truecolor | 24bit)
+    printf '\033[%s38;2;%d;%d;%dm' "${attrs}" "0x${1:0:2}" "0x${1:2:2}" "0x${1:4:2}"
+    ;;
+  *) printf '\033[%s38;5;%dm' "${attrs}" "$2" ;;
+  esac
+}
+
+# Happier app tokens: indigo accent (#5C6BC0, lightened for dark terminals) and
+# the iOS-style success/warning/danger colors (#34C759 / #FF9500 / #FF3B30).
+# shellcheck disable=SC2034 # engine globals, read by the engine msg_* helpers
+_happier_palette() {
+  HAPPIER_ACCENT="$(_happier_sgr 7986cb 104 1)"
+  YW="$(_happier_sgr c5cae9 189)"   # in-progress text
+  YWB="$(_happier_sgr ff9500 208)"  # warnings
+  BL="$(_happier_sgr 9fa8da 146)"   # values
+  RD="$(_happier_sgr ff3b30 203 1)" # errors
+  [[ -n "${dev_mode:-}" ]] && return 0
+  GN="$(_happier_sgr 34c759 77 1)"  # success
+  DGN="$(_happier_sgr 7986cb 104)"  # setting labels
+  BGN="$(_happier_sgr 34c759 77 4)" # setting values
+}
+
+# Single-width glyphs in the palette instead of the engine's emoji.
+# shellcheck disable=SC2034 # engine globals, read by the engine msg_* helpers
+_happier_icons() {
+  local t="${TAB:-  }" a="${HAPPIER_ACCENT}" c=$'\033[m' name
+  CM="${t}${GN}✔${c}${t}"
+  CROSS="${t}${RD}✘${c}${t}"
+  DNSOK="${GN}✔${c} "
+  DNSFAIL="${t}${RD}✘${c}${t}"
+  INFO="${t}${a}◆${c}${t}"
+  OVERRIDE="${t}${a}⇄${c}${t}"
+  CREATING="${t}${a}➜${c}${t}"
+  HOURGLASS="${t}${a}◌${c}${t}"
+  VERBOSE_CROPPED="${a}▸${c}${t}"
+  for name in OS OSVERSION CONTAINERTYPE DISKSIZE CPUCORE RAMSIZE SEARCH VERIFYPW \
+    CONTAINERID HOSTNAME BRIDGE NETWORK GATEWAY ICON_DISABLEIPV6 DEFAULT \
+    MACADDRESS VLANTAG ROOTSSH ADVANCED FUSE GPU; do
+    printf -v "${name}" '%s' "${t}${a}▸${c}${t}"
+  done
+}
+
+# The banner (figlet "slant", like the engine's generated headers), shaded
+# top-down from light to deep indigo, plus a tagline.
+_happier_banner() {
+  local shades=(c5cae9:189 9fa8da:146 7986cb:104 5c6bc0:68 3f51b5:61 3f51b5:61)
+  local c=$'\033[m' i=0 line shade
+  while IFS= read -r line; do
+    shade="${shades[i]:-3f51b5:61}"
+    printf '%s%s%s\n' "$(_happier_sgr "${shade%%:*}" "${shade##*:}" 1)" "${line}" "${c}"
+    i=$((i + 1))
+  done <<'BANNER'
+    __                      _
+   / /_  ____ _____  ____  (_)__  _____
+  / __ \/ __ `/ __ \/ __ \/ / _ \/ ___/
+ / / / / /_/ / /_/ / /_/ / /  __/ /
+/_/ /_/\__,_/ .___/ .___/_/\___/_/
+           /_/   /_/
+BANNER
+  printf '%s  %s%s\n' "$(_happier_sgr 9fa8da 146)" "${HAPPIER_SKIN_BACKTITLE} · https://happier.dev" "${c}"
+}
+
+# Install the skin over the already-loaded engine. Call once, right after this
+# file is sourced (host and container). No-op without the engine (tests).
+# shellcheck disable=SC2034,SC2317 # engine globals; overrides the engine calls
+happier_apply_skin() {
+  [[ "${HAPPIER_PVE_SKIN:-1}" == "0" ]] && return 0
+  declare -f color >/dev/null 2>&1 || return 0
+  # Keep the engine's color() (it resets CL and owns the dev-mode red) and layer
+  # the palette on top. ct/install call `color` again later, so the override must
+  # be the function, not just the variables. Guarded: a second call must not
+  # copy the override onto itself.
+  if ! declare -f _happier_engine_color >/dev/null 2>&1; then
+    eval "_happier_engine_color() $(declare -f color | tail -n +2)"
+  fi
+  color() {
+    _happier_engine_color
+    _happier_palette
+    _happier_icons
+  }
+  color_spinner() {
+    CS_YW="$(_happier_sgr c5cae9 189)"
+    CS_YWB="$(_happier_sgr 7986cb 104 1)"
+    CS_CL=$'\033[m'
+  }
+  get_header() { _happier_banner; }
+  # The engine hardcodes its backtitle in every dialog; rewrite it in flight.
+  # Exit status passes through (Cancel = 1, Esc = 255 drive the engine's flow).
+  whiptail() {
+    local args=() arg
+    for arg in "$@"; do
+      args+=("${arg//Proxmox VE Helper Scripts/${HAPPIER_SKIN_BACKTITLE}}")
+    done
+    command whiptail "${args[@]}"
+  }
+  export NEWT_COLORS="${NEWT_COLORS:-${HAPPIER_NEWT_COLORS}}"
+  color
+}

@@ -43,6 +43,7 @@ fi
 export HAPPIER_COMMON_FUNC
 # shellcheck disable=SC1091 # sourced from a runtime-fetched string, not a file
 source /dev/stdin <<<"${HAPPIER_COMMON_FUNC}"
+happier_apply_skin
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: happier-dev
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
