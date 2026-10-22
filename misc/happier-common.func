@@ -154,9 +154,11 @@ restart_happier_unit() {
 # the "●" failure marker out of field 1. Prints the unit name, or nothing.
 find_happier_daemon_unit() {
   local unit=""
-  unit="$(systemctl list-unit-files --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
+  # `|| true`: systemd 257 exits 1 when nothing matches, which under the engine's
+  # errexit + ERR trap would abort the caller (e.g. update on a server_only CT).
+  unit="$(systemctl list-unit-files --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}' || true)"
   if [[ -z "${unit}" ]]; then
-    unit="$(systemctl list-units --all --plain --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}')"
+    unit="$(systemctl list-units --all --plain --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}' || true)"
   fi
   printf '%s' "${unit}"
 }
@@ -227,17 +229,13 @@ resolve_installed_cli_for_channel() {
   local candidate=""
   candidate="$(command -v "${cli_name}" 2>/dev/null || true)"
   if [[ -z "${candidate}" ]]; then
-    # The BIN_DIR shim, the managed current/ dir under HAPPIER_CLI_INSTALL_DIR,
-    # then the pre-2026-10 layouts under /opt/happier/cli (see install_happier_cli).
+    # The bootstrap's BIN_DIR shim, its per-install bin/ shim (both point at
+    # <dir>/cli[-<channel>]/current/happier), then the pre-2026-10 /opt/happier/cli.
     local _cand=""
     for _cand in \
       "/usr/local/bin/${cli_name}" \
-      "${HAPPIER_CLI_INSTALL_DIR}/current/${cli_name}" \
-      "${HAPPIER_CLI_INSTALL_DIR}/cli/current/${cli_name}" \
       "${HAPPIER_CLI_INSTALL_DIR}/bin/${cli_name}" \
-      "/opt/happier/cli/bin/${cli_name}" \
-      "/opt/happier/cli/cli/current/${cli_name}" \
-      "/opt/happier/cli/current/${cli_name}"; do
+      "/opt/happier/cli/bin/${cli_name}"; do
       if [[ -x "${_cand}" ]]; then
         candidate="${_cand}"
         break
@@ -245,6 +243,26 @@ resolve_installed_cli_for_channel() {
     done
   fi
   printf '%s' "${candidate}"
+}
+
+# Install (or refresh) the devbox daemon's system unit, running as the happier
+# user against the "proxmox" server profile.
+#   $1 = CLI binary, $2 = 1 to enable at boot, anything else for --no-autostart
+# Runs as ROOT (`--mode system` requires it) with the happier home, then hands
+# anything created there back to happier. Returns the CLI's exit code: non-zero is
+# expected before auth (its "daemon became active" check cannot pass while the
+# unit waits for auth), so callers check for the unit instead. Re-run on every
+# update: the unit's ExecStart pins the CLI payload version that installed it.
+happier_install_daemon_service() {
+  local cli_bin="$1" autostart="$2"
+  local svc_args=(--server proxmox service install --mode system --system-user happier --yes)
+  [[ "${autostart}" == "1" ]] || svc_args+=(--no-autostart)
+  local rc=0
+  HOME="/home/happier" \
+    HAPPIER_HOME_DIR="/home/happier/.happier" \
+    $STD "${cli_bin}" "${svc_args[@]}" </dev/null || rc=$?
+  chown -R happier:happier /home/happier/.happier 2>/dev/null || true
+  return "${rc}"
 }
 
 # Where the happier.dev bootstrap installs the CLI. Deliberately OUTSIDE

@@ -775,12 +775,8 @@ install_devbox_background_service() {
   # Autostart off still gets the unit (`--no-autostart` = on-demand, not enabled
   # at boot): the env drop-in needs something to attach to, and starting the
   # daemon later is then a plain `systemctl start`.
-  local svc_args=(--server proxmox service install --mode system --system-user happier --yes)
-  [[ "${AUTOSTART}" == "1" ]] || svc_args+=(--no-autostart)
   local svc_rc=0
-  HOME="/home/happier" \
-    HAPPIER_HOME_DIR="/home/happier/.happier" \
-    $STD "${HAPPIER_CLI_BIN}" "${svc_args[@]}" </dev/null || svc_rc=$?
+  happier_install_daemon_service "${HAPPIER_CLI_BIN}" "${AUTOSTART}" || svc_rc=$?
   if [[ "${svc_rc}" -ne 0 ]]; then
     if [[ -n "$(find_happier_daemon_unit)" ]]; then
       msg_warn "Background service installed; daemon stays inactive until authenticated (CLI activation check rc=${svc_rc})."
@@ -789,9 +785,6 @@ install_devbox_background_service() {
       exit 1
     fi
   fi
-  # The CLI ran as root with HOME=/home/happier: hand anything it created there
-  # back to the daemon's user.
-  chown -R happier:happier /home/happier/.happier 2>/dev/null || true
   msg_ok "Background service installed"
 }
 
@@ -822,8 +815,9 @@ ensure_relay_host_installed() {
 #   ~happier/.local/bin/claude, which the installer wires onto the user's PATH.
 # - codex: on the installers path via `happier install provider codex` (a managed,
 #   checksum-pinned GitHub-release binary in the happier user's Happier home, which
-#   the daemon discovers on its own; no Node needed). from_source already has
-#   Node, so it keeps the pinned npm global install.
+#   the daemon discovers on its own; no Node needed). If that fails — and on
+#   from_source, which already has Node — the pinned npm global install is used
+#   (Node 24 is installed on demand for it).
 # Non-fatal throughout: a failure still lets the daemon be wired to a later manual install.
 install_devbox_agents() {
   if [[ "${INSTALL_AGENTS}" != "1" ]]; then
@@ -843,12 +837,25 @@ install_devbox_agents() {
     msg_info "Installing codex (Happier managed provider install, as happier)"
     if $STD sudo -u happier -H "${HAPPIER_CLI_BIN}" install provider codex </dev/null; then
       msg_ok "Installed codex"
-    else
-      msg_warn "codex install failed (non-fatal) — later: sudo -u happier -H ${HAPPIER_CLI_NAME} install provider codex"
+      return 0
     fi
-    return 0
+    # Observed 2026-10-22 on CLI 0.2.16: "archive exceeds expanded-byte limit"
+    # (the current codex release outgrew the CLI's extraction cap). Fall back to
+    # the pinned npm install rather than leaving the devbox without codex.
+    msg_warn "Managed codex install failed; falling back to the pinned npm install"
   fi
 
+  if ! command -v npm >/dev/null 2>&1; then
+    msg_info "Installing Node.js (required for the codex npm install)"
+    # Guarded: setup_nodejs returns non-zero on apt/repo failures and would otherwise
+    # abort the whole install via the ERR trap, contradicting the non-fatal contract.
+    if NODE_VERSION="24" setup_nodejs; then
+      msg_ok "Installed Node.js"
+    else
+      msg_warn "Node.js install failed (non-fatal) — skipping codex install"
+      return 0
+    fi
+  fi
   if ! command -v npm >/dev/null 2>&1; then
     msg_warn "npm not available; skipping codex install"
     return 0

@@ -70,47 +70,34 @@ catch_errors
 function update_script() {
   header_info
   check_container_storage
-  check_container_resources
+  # No check_container_resources: it compares against the 4 CPU / 8 GB creation
+  # defaults and, unattended (the auto-update timer), exits on any smaller CT,
+  # while a CLI + relay update needs nothing like that.
 
   local installer_channel=""
   installer_channel="$(detect_installed_channel || true)"
 
   if [[ -n "${installer_channel}" ]]; then
-    local cli_bin=""
     local config_env_path=""
     config_env_path="$(channel_config_env_path "${installer_channel}")"
-    cli_bin="$(resolve_installed_cli_for_channel "${installer_channel}" || true)"
-    # Containers installed before 2026-10 keep the CLI under /opt/happier/cli. The
-    # stable relay reinstall below clears /opt/happier, so move the CLI out first
-    # (also recovers a CLI that an earlier stable reinstall already deleted).
-    local cli_real=""
-    [[ -n "${cli_bin}" ]] && cli_real="$(readlink -f "${cli_bin}" 2>/dev/null || true)"
-    if [[ -z "${cli_bin}" || "${cli_real}" == /opt/happier/cli/* ]]; then
-      msg_info "Reinstalling ${APP} CLI into ${HAPPIER_CLI_INSTALL_DIR} (channel: ${installer_channel})"
-      if ! install_happier_cli "${installer_channel}"; then
-        msg_error "Happier CLI reinstall failed. Try reinstalling the Proxmox container."
-        exit 1
-      fi
-      cli_bin="$(resolve_installed_cli_for_channel "${installer_channel}" || true)"
-      if [[ -z "${cli_bin}" ]]; then
-        msg_error "No channel-matched Happier CLI was found. Try reinstalling the Proxmox container."
-        exit 1
-      fi
-      msg_ok "Reinstalled ${APP} CLI"
-    fi
-
+    # Update the CLI by re-running the bootstrap into HAPPIER_CLI_INSTALL_DIR (it is
+    # idempotent and repoints the /usr/local/bin shim). Not `self update`: run as
+    # root it installs into /root/.happier/cli and leaves the CLI on PATH as is.
+    # This also moves pre-2026-10 containers off /opt/happier/cli, which the stable
+    # relay reinstall below clears, and recovers a CLI an older update deleted.
     msg_info "Updating ${APP} CLI (channel: ${installer_channel})"
-    local self_update_rc=0
-    "${cli_bin}" self update --channel="${installer_channel}" >/dev/null 2>&1 || self_update_rc=$?
+    local cli_update_rc=0
+    install_happier_cli "${installer_channel}" || cli_update_rc=$?
+    local cli_bin=""
     cli_bin="$(resolve_installed_cli_for_channel "${installer_channel}" || true)"
     if [[ -z "${cli_bin}" ]]; then
-      msg_error "Happier CLI missing after self-update. Try reinstalling the Proxmox container."
+      msg_error "No channel-matched Happier CLI was found after the update. Try reinstalling the Proxmox container."
       exit 1
     fi
-    if [[ "${self_update_rc}" -eq 0 ]]; then
+    if [[ "${cli_update_rc}" -eq 0 ]]; then
       msg_ok "Updated ${APP} CLI"
     else
-      msg_warn "CLI self-update failed (rc=${self_update_rc}); continuing with the existing CLI"
+      msg_warn "CLI update failed (rc=${cli_update_rc}); continuing with the existing CLI"
     fi
 
     local relay_service=""
@@ -165,15 +152,24 @@ function update_script() {
     else
       systemctl stop "${relay_service}" >/dev/null 2>&1 || true
     fi
-    # Devbox: the relay restart above does not cycle the daemon, so a CLI self-update
-    # leaves the running daemon on the old CLI. Restart its systemd unit if it is
-    # running (no-op for server_only). Not via `daemon restart`: this runs as root,
-    # and the CLI refuses to act on a service owned by another Happier home
-    # (/home/happier/.happier).
+    # Devbox (no-op for server_only): re-run `service install` so the daemon unit's
+    # ExecStart follows the updated CLI payload — it pins the version that
+    # installed it, which a CLI update can prune. Keep the user's enabled/running
+    # choice, then restart it via systemd if it was running. Not via
+    # `daemon restart`: this runs as root, and the CLI refuses to act on a service
+    # owned by another Happier home (/home/happier/.happier).
     local _daemon_unit
     _daemon_unit="$(find_happier_daemon_unit)"
-    if [[ -n "${_daemon_unit}" ]] && systemctl is-active --quiet "${_daemon_unit}" 2>/dev/null; then
-      restart_happier_unit "${_daemon_unit}"
+    if [[ -n "${_daemon_unit}" ]]; then
+      local daemon_was_enabled=1 daemon_was_active=1
+      systemctl is-enabled --quiet "${_daemon_unit}" 2>/dev/null || daemon_was_enabled=0
+      systemctl is-active --quiet "${_daemon_unit}" 2>/dev/null || daemon_was_active=0
+      happier_install_daemon_service "${cli_bin}" "${daemon_was_enabled}" || true
+      if [[ "${daemon_was_active}" -eq 1 ]]; then
+        restart_happier_unit "${_daemon_unit}"
+      else
+        systemctl stop "${_daemon_unit}" >/dev/null 2>&1 || true
+      fi
     fi
     msg_ok "Updated ${APP}"
     exit 0

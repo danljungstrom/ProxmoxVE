@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# D2: the installers branch of ct/happier.sh's update_script — CLI relocation,
-# relay reinstall arguments (env re-pass, --yes, never HAPPIER_SERVER_UI_DIR),
-# autostart restore and the daemon restart — plus the from_source guidance
-# branch. update_script is extracted by name and run in a subshell (it exits)
+# D2: the installers branch of ct/happier.sh's update_script — CLI update via
+# the bootstrap, relay reinstall arguments (env re-pass, --yes, never
+# HAPPIER_SERVER_UI_DIR), autostart restore and the daemon unit refresh — plus
+# the from_source guidance branch. update_script is extracted by name and run in a subshell (it exits)
 # against a fake CLI and a systemctl stub that record what they were asked to do.
 set -u
 cd "$(dirname "$0")" || exit 1
@@ -35,9 +35,10 @@ find_happier_daemon_unit() { printf '%s' "${FAKE_DAEMON_UNIT}"; }
 restart_happier_unit() { echo "restart $1" >>"${LOG}"; }
 install_happier_cli() {
   echo "install_happier_cli $1" >>"${LOG}"
+  [[ -n "${FAKE_BOOTSTRAP_BROKEN:-}" ]] && return 1
   make_cli
 }
-readlink() { printf '%s' "${FAKE_CLI_REAL:-${SB}/cli}"; }
+happier_install_daemon_service() { echo "daemon_service $2" >>"${LOG}"; }
 # systemctl: is-enabled/is-active answer from FAKE_ENABLED/FAKE_ACTIVE (unit
 # names), everything else is logged.
 systemctl() {
@@ -65,7 +66,7 @@ reset() {
   FAKE_DAEMON_UNIT=""
   FAKE_ENABLED="happier-server"
   FAKE_ACTIVE="happier-server"
-  FAKE_CLI_REAL=""
+  FAKE_BOOTSTRAP_BROKEN=""
   unset FAKE_RELAY_RC
   export FAKE_RELAY_RC LOG
 }
@@ -91,7 +92,8 @@ EOF
   line="$(relay_line)"
   assert_eq "${line}" "cli relay host install --mode system --channel stable --yes --env HAPPIER_SERVER_HOST=0.0.0.0 --env PORT=3010 --env HAPPIER_PUBLIC_SERVER_URL=https://happier.example.com" \
     "env re-passed (quotes stripped, empty skipped), --yes, no UI_DIR"
-  assert_ok "CLI self-updated on the installed channel" grep -q '^cli self update --channel=stable$' "${LOG}"
+  assert_ok "CLI updated via the bootstrap on the installed channel" grep -q '^install_happier_cli stable$' "${LOG}"
+  assert_fail "never via root self update" grep -q '^cli self update' "${LOG}"
 }
 
 test_preview_channel_args() {
@@ -125,41 +127,54 @@ test_enabled_but_stopped_stays_stopped() {
   assert_ok "stopped again" grep -q '^systemctl stop happier-server$' "${LOG}"
 }
 
-test_daemon_restarted_only_when_running() {
+test_daemon_unit_refreshed_and_state_kept() {
   reset
   make_cli
   FAKE_DAEMON_UNIT="happier-daemon.service"
   run_update
-  assert_fail "inactive daemon left alone" grep -q '^restart happier-daemon.service$' "${LOG}"
+  assert_ok "unit refreshed with --no-autostart semantics (was disabled)" grep -q '^daemon_service 0$' "${LOG}"
+  assert_fail "inactive daemon not restarted" grep -q '^restart happier-daemon.service$' "${LOG}"
+  assert_ok "inactive daemon stopped again" grep -q '^systemctl stop happier-daemon.service$' "${LOG}"
   reset
   make_cli
   FAKE_DAEMON_UNIT="happier-daemon.service"
+  FAKE_ENABLED="happier-server happier-daemon.service"
   FAKE_ACTIVE="happier-server happier-daemon.service"
   run_update
+  assert_ok "enabled unit refreshed with autostart" grep -q '^daemon_service 1$' "${LOG}"
   assert_ok "running daemon restarted via systemd" grep -q '^restart happier-daemon.service$' "${LOG}"
   assert_fail "never via the root CLI" grep -q '^cli daemon' "${LOG}"
 }
 
-test_legacy_cli_location_is_reinstalled() {
+test_server_only_has_no_daemon_step() {
   reset
   make_cli
-  FAKE_CLI_REAL="/opt/happier/cli/current/happier"
   run_update
-  assert_ok "CLI under /opt/happier/cli moved out" grep -q '^install_happier_cli stable$' "${LOG}"
+  assert_fail "no daemon unit -> no service install" grep -q '^daemon_service' "${LOG}"
 }
 
 test_missing_cli_is_reinstalled() {
   reset
   run_update
-  assert_ok "missing CLI reinstalled" grep -q '^install_happier_cli stable$' "${LOG}"
+  assert_ok "missing CLI reinstalled by the bootstrap" grep -q '^install_happier_cli stable$' "${LOG}"
   assert_ok "then the relay is reinstalled with it" has_relay_line
 }
 
-test_current_cli_location_is_kept() {
+test_bootstrap_failure_keeps_existing_cli() {
   reset
   make_cli
-  run_update
-  assert_fail "no reinstall for a CLI outside /opt/happier" grep -q '^install_happier_cli' "${LOG}"
+  FAKE_BOOTSTRAP_BROKEN=1
+  assert_ok "update still exits 0" run_update
+  assert_ok "warned" grep -q 'CLI update failed' "${LOG}"
+  assert_ok "relay still reinstalled with the existing CLI" has_relay_line
+}
+
+test_no_cli_at_all_fails() {
+  reset
+  FAKE_BOOTSTRAP_BROKEN=1
+  local rc=0
+  run_update || rc=$?
+  assert_eq "${rc}" "1" "no CLI after the bootstrap -> exit 1"
 }
 
 test_relay_failure_is_not_fatal() {
