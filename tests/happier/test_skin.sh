@@ -78,7 +78,7 @@ test_spinner_and_banner() {
   out="$(in_engine 'happier_apply_skin; get_header' | sed 's/\x1b\[[0-9;]*m//g')"
   assert_ok "banner art" grep -qF '/_/ /_/\__,_/ .___/ .___/_/\___/_/' <<<"${out}"
   assert_ok "tagline" grep -q 'Happier for Proxmox VE · https://happier.dev' <<<"${out}"
-  assert_eq "$(wc -l <<<"${out}")" "7" "6 art lines + tagline"
+  assert_eq "$(wc -l <<<"${out}")" "8" "top padding + 6 art lines + tagline"
 }
 
 test_truecolor_when_advertised() {
