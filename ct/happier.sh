@@ -21,6 +21,7 @@ export COMMUNITY_SCRIPTS_CORE_URL
 # placeholders in. Rewrite it first as the plain legacy one-liner the migration
 # understands (temp file + mv: the old helper may be the script running us).
 if ! command -v pveversion >/dev/null 2>&1 && grep -q 'INSTALLER_REPO' /usr/bin/update 2>/dev/null; then
+  # shellcheck disable=SC2016 # the $(curl ...) is meant literally, for the entrypoint
   _happier_update_tmp="$(mktemp /usr/bin/.update.XXXXXX 2>/dev/null)" &&
     printf '#!/usr/bin/env bash\nbash -c "$(curl -fsSL %s/ct/happier.sh)"\n' "${COMMUNITY_SCRIPTS_URL:-${_CS_DEFAULT_URL}}" >"${_happier_update_tmp}" &&
     chmod +x "${_happier_update_tmp}" && mv -f "${_happier_update_tmp}" /usr/bin/update
@@ -69,20 +70,23 @@ function update_script() {
     local config_env_path=""
     config_env_path="$(channel_config_env_path "${installer_channel}")"
     cli_bin="$(resolve_installed_cli_for_channel "${installer_channel}" || true)"
-    if [[ -z "${cli_bin}" ]]; then
-      msg_error "No channel-matched Happier CLI was found. Try reinstalling the Proxmox container."
-      exit 1
-    fi
-
-    local ui_managed=0
-    if [[ -f "${config_env_path}" ]] && grep -q '^HAPPIER_SERVER_UI_DIR=' "${config_env_path}"; then
-      ui_managed=1
-      msg_info "Refreshing ${APP} web UI bundle (channel: ${installer_channel})"
-      if install_managed_ui_bundle "${installer_channel}" refresh >/dev/null; then
-        msg_ok "Refreshed ${APP} web UI bundle"
-      else
-        msg_warn "UI bundle refresh failed; keeping the existing bundle"
+    # Containers installed before 2026-10 keep the CLI under /opt/happier/cli. The
+    # stable relay reinstall below clears /opt/happier, so move the CLI out first
+    # (also recovers a CLI that an earlier stable reinstall already deleted).
+    local cli_real=""
+    [[ -n "${cli_bin}" ]] && cli_real="$(readlink -f "${cli_bin}" 2>/dev/null || true)"
+    if [[ -z "${cli_bin}" || "${cli_real}" == /opt/happier/cli/* ]]; then
+      msg_info "Reinstalling ${APP} CLI into ${HAPPIER_CLI_INSTALL_DIR} (channel: ${installer_channel})"
+      if ! install_happier_cli "${installer_channel}"; then
+        msg_error "Happier CLI reinstall failed. Try reinstalling the Proxmox container."
+        exit 1
       fi
+      cli_bin="$(resolve_installed_cli_for_channel "${installer_channel}" || true)"
+      if [[ -z "${cli_bin}" ]]; then
+        msg_error "No channel-matched Happier CLI was found. Try reinstalling the Proxmox container."
+        exit 1
+      fi
+      msg_ok "Reinstalled ${APP} CLI"
     fi
 
     msg_info "Updating ${APP} CLI (channel: ${installer_channel})"
@@ -109,18 +113,12 @@ function update_script() {
     systemctl is-active --quiet "${relay_service}" 2>/dev/null || relay_was_active=0
 
     msg_info "Updating ${APP} relay host (channel: ${installer_channel})"
-    local relay_install_args=(relay host install --mode system --channel "${installer_channel}")
-    if systemctl is-active --quiet "${relay_service}-updater.timer" 2>/dev/null; then
-      relay_install_args+=(--auto-update)
-    fi
-    # A3: the bare reinstall resets the relay env to vendor defaults (verified live
-    # on dev channel: it rewrites HAPPIER_SERVER_UI_DIR from the installer's managed
-    # /var/lib/... bundle dir back to /opt/...). Re-pass the install-managed env so
-    # the update preserves it — otherwise the freshly-refreshed UI bundle stops
-    # being served after every update.
-    if [[ "${ui_managed}" -eq 1 ]]; then
-      relay_install_args+=(--env "HAPPIER_SERVER_UI_DIR=$(channel_ui_current_dir "${installer_channel}")")
-    fi
+    # --yes: a TTY reinstall otherwise stops on the CLI's follow-up questions.
+    local relay_install_args=(relay host install --mode system --channel "${installer_channel}" --yes)
+    # A3: re-pass the install-managed env. Current CLIs preserve operator-owned
+    # keys across a reinstall on their own; re-passing keeps older CLIs (which
+    # reset the env to vendor defaults) correct too. HAPPIER_SERVER_UI_DIR is NOT
+    # re-passed: the relay owns it now and rejects an override.
     if [[ -f "${config_env_path}" ]]; then
       local _envk="" _envv=""
       for _envk in HAPPIER_SERVER_HOST PORT HAPPIER_PUBLIC_SERVER_URL HAPPIER_WEBAPP_URL; do
@@ -153,15 +151,14 @@ function update_script() {
       systemctl stop "${relay_service}" >/dev/null 2>&1 || true
     fi
     # Devbox: the relay restart above does not cycle the daemon, so a CLI self-update
-    # leaves the running daemon on the old CLI. Restart it (no-op for server_only).
-    if "${cli_bin}" daemon status >/dev/null 2>&1; then
-      "${cli_bin}" daemon restart >/dev/null 2>&1 || true
-    else
-      local _daemon_unit
-      _daemon_unit="$(find_happier_daemon_unit)"
-      if [[ -n "${_daemon_unit}" ]]; then
-        restart_happier_unit "${_daemon_unit}"
-      fi
+    # leaves the running daemon on the old CLI. Restart its systemd unit if it is
+    # running (no-op for server_only). Not via `daemon restart`: this runs as root,
+    # and the CLI refuses to act on a service owned by another Happier home
+    # (/home/happier/.happier).
+    local _daemon_unit
+    _daemon_unit="$(find_happier_daemon_unit)"
+    if [[ -n "${_daemon_unit}" ]] && systemctl is-active --quiet "${_daemon_unit}" 2>/dev/null; then
+      restart_happier_unit "${_daemon_unit}"
     fi
     msg_ok "Updated ${APP}"
     exit 0
@@ -254,6 +251,12 @@ function app_questions() {
   HAPPIER_PVE_AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"
   HAPPIER_PVE_AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"
 
+  local install_method=""
+  install_method="$(normalize_install_method "${HAPPIER_PVE_INSTALL_METHOD:-}")" || {
+    msg_error "Invalid HAPPIER_PVE_INSTALL_METHOD='${HAPPIER_PVE_INSTALL_METHOD}'. Use: installers | from_source."
+    exit 1
+  }
+
   if [[ -z "${_preset_type}" ]]; then
     HAPPIER_PVE_INSTALL_TYPE=$(
       whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --radiolist \
@@ -271,7 +274,8 @@ function app_questions() {
       ;;
   esac
 
-  if [[ -z "${_preset_ui}" ]]; then
+  # Only from_source can skip the UI; the managed relay always serves its bundled UI.
+  if [[ -z "${_preset_ui}" && "${install_method}" == "from_source" ]]; then
     if (whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --yesno \
       "\nServe the built Happier web UI from this machine?\n\nNote: for remote access, the UI requires HTTPS (Tailscale Serve or your reverse proxy).\n" 12 72); then
       HAPPIER_PVE_SERVE_UI="1"
@@ -382,7 +386,7 @@ function app_questions() {
 
   if [[ -z "${_preset_au}" ]]; then
     if (whiptail --backtitle "${BACKTITLE}" --title "AUTO-UPDATE" --yesno \
-      "\nEnable automatic updates?\n\nInstalls Happier's built-in updater timer (signature-verified, atomic, health-checked, auto-rollback). Default: No.\n" 13 72 --defaultno); then
+      "\nEnable automatic updates?\n\nInstalls a daily systemd timer that runs this container's 'update' unattended (CLI self-update + relay reinstall + daemon restart). Default: No.\n" 13 72 --defaultno); then
       HAPPIER_PVE_AUTO_UPDATE="1"
       HAPPIER_PVE_AUTO_UPDATE_AT=$(
         whiptail --backtitle "${BACKTITLE}" --title "AUTO-UPDATE TIME" --inputbox \
@@ -402,8 +406,8 @@ function app_questions() {
     esac
     HAPPIER_PVE_CHANNEL=$(
       whiptail --backtitle "${BACKTITLE}" --title "HAPPIER RELEASE CHANNEL" --radiolist \
-        "\nChoose a release channel:\n\n- stable: production channel (NOTE: the hosted stable build has recently been failing fresh system installs — last checked 2026-07-17; prefer preview/dev or verify first)\n- preview: pre-release (newer, less tested)\n- dev: rolling/unstable; there is no hosted web UI unless you serve the UI locally\n" 20 72 3 \
-        "stable" "Stable (see note)" "${_ch_stable}" \
+        "\nChoose a release channel:\n\n- stable: production channel (recommended)\n- preview: pre-release (newer, less tested)\n- dev: rolling/unstable; there is no hosted web UI unless you serve the UI locally\n" 18 72 3 \
+        "stable" "Stable" "${_ch_stable}" \
         "preview" "Preview / pre-release" "${_ch_preview}" \
         "dev" "Dev / unstable" "${_ch_dev}" \
         3>&1 1>&2 2>&3

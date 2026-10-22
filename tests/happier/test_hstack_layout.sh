@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# D8: resolve_hstack_layout jq parsing + workspace 3-way fallback.
-# D9: resolve_ui_extract_root flat / nested / missing index.html.
-# Both live in misc/happier-common.func and are sourced directly.
+# D8: resolve_hstack_layout jq parsing + workspace 3-way fallback
+# (misc/happier-common.func, sourced directly).
 set -u
 cd "$(dirname "$0")" || exit 1
 # shellcheck disable=SC1091 # test-local helper, resolved at runtime
@@ -11,8 +10,6 @@ msg_warn() { :; }
 msg_error() { echo "ERR: $*" >&2; }
 msg_info() { :; }
 msg_ok() { :; }
-# Any non-default value; keeps the source-time key-override warning quiet.
-export HAPPIER_MINISIGN_PUBKEY="test-key-placeholder"
 # shellcheck disable=SC1091 # unit under test, resolved at runtime
 source ../../misc/happier-common.func
 
@@ -75,28 +72,6 @@ test_resolve_hstack_layout_bad_json_all_empty() {
   resolve_hstack_layout "${hb}"
   assert_eq "${HSTACK_WHERE_HOME}" "" "bad json -> empty home (callers apply defaults)"
   assert_eq "${HSTACK_WHERE_ENV}" "" "bad json -> empty env"
-}
-
-# --- D9 ---------------------------------------------------------------------
-
-test_ui_extract_root_flat() {
-  local d="${SB}/flat"
-  mkdir -p "${d}"
-  : >"${d}/index.html"
-  assert_eq "$(resolve_ui_extract_root "${d}")" "${d}" "top-level index.html -> extract dir"
-}
-
-test_ui_extract_root_nested() {
-  local d="${SB}/nested"
-  mkdir -p "${d}/dist"
-  : >"${d}/dist/index.html"
-  assert_eq "$(resolve_ui_extract_root "${d}")" "${d}/dist" "nested index.html -> its dir"
-}
-
-test_ui_extract_root_missing() {
-  local d="${SB}/empty"
-  mkdir -p "${d}/sub"
-  assert_fail "no index.html -> returns non-zero" resolve_ui_extract_root "${d}"
 }
 
 run_tests

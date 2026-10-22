@@ -75,7 +75,7 @@ STACK_PACKAGE_RAW="${HAPPIER_PVE_STACK_PACKAGE:-${HAPPIER_PVE_HSTACK_PACKAGE:-}}
 SERVER_PORT_RAW="${HAPPIER_PVE_SERVER_PORT:-}"                                      # optional explicit PORT override
 INSTALL_AGENTS="${HAPPIER_PVE_INSTALL_AGENTS:-1}"                                   # 1 | 0 (install claude+codex on devbox)
 DAEMON_GITHUB_PAT="${HAPPIER_PVE_GITHUB_PAT:-}"                                     # optional daemon GITHUB_PERSONAL_ACCESS_TOKEN
-AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"                                         # 1 | 0 (enable managed auto-update timer)
+AUTO_UPDATE="${HAPPIER_PVE_AUTO_UPDATE:-0}"                                         # 1 | 0 (daily `update` systemd timer; installers only)
 AUTO_UPDATE_AT="${HAPPIER_PVE_AUTO_UPDATE_AT:-04:00}"                               # HH:MM for the auto-update timer
 # Secrets hygiene: the PAT and Tailscale key now live in locals. Drop the exported
 # copies so they are NOT inherited by the third-party root children spawned later
@@ -504,11 +504,13 @@ print_access_urls() {
 
 # Interactive daemon auth when requested (devbox + served UI + opt-in), then a
 # relay/service restart so the freshly-authenticated daemon is picked up.
-#   $1 = CLI to run the auth login with, $2 = unit to restart on success.
+#   $1 = unit to restart on success, $2... = the auth login command (method-specific:
+#   only hstack knows --start-if-needed; the managed CLI rejects it).
 run_daemon_auth_if_requested() {
-  local auth_cli="$1" restart_unit="$2"
+  local restart_unit="$1"
+  shift
   [[ "${INSTALL_TYPE}" == "devbox" && "${SERVE_UI}" == "1" && "${DAEMON_AUTH}" == "1" ]] || return 0
-  if run_daemon_auth_interactive "${auth_cli}" auth login --method=mobile --no-open --start-if-needed; then
+  if run_daemon_auth_interactive "$@"; then
     if [[ "${AUTOSTART}" == "1" ]]; then
       restart_happier_unit "${restart_unit}"
     fi
@@ -549,19 +551,17 @@ resolve_installed_cli_path_or_fail() {
   HAPPIER_CLI_BIN="${candidate}"
 }
 
-INSTALL_METHOD="$(printf '%s' "${INSTALL_METHOD_RAW}" | tr -d '\r' | xargs | tr '[:upper:]' '[:lower:]')"
-case "${INSTALL_METHOD}" in
-  "" | auto | installers | installer | selfhost | self-host)
-    INSTALL_METHOD="installers"
-    ;;
-  from_source | from-source | source | setup | setup-from-source | legacy)
-    INSTALL_METHOD="from_source"
-    ;;
-  *)
-    msg_error "Invalid HAPPIER_PVE_INSTALL_METHOD=${INSTALL_METHOD_RAW}. Use: installers | from_source."
-    exit 1
-    ;;
-esac
+INSTALL_METHOD="$(normalize_install_method "${INSTALL_METHOD_RAW}")" || {
+  msg_error "Invalid HAPPIER_PVE_INSTALL_METHOD=${INSTALL_METHOD_RAW}. Use: installers | from_source."
+  exit 1
+}
+
+# The managed relay always serves the web UI bundled in its release payload (it
+# owns HAPPIER_SERVER_UI_DIR); only from_source can skip building/serving the UI.
+if [[ "${INSTALL_METHOD}" == "installers" && "${SERVE_UI}" != "1" ]]; then
+  msg_warn "HAPPIER_PVE_SERVE_UI=0 only applies to from_source installs; the managed relay always serves its bundled web UI."
+  SERVE_UI="1"
+fi
 
 PUBLIC_URL="$(normalize_url_no_trailing_slash "${PUBLIC_URL_RAW}")"
 if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
@@ -582,13 +582,6 @@ HAPPIER_CHANNEL="$(normalize_happier_channel "${HAPPIER_CHANNEL_RAW}")" || {
   msg_error "Invalid HAPPIER release channel: ${HAPPIER_CHANNEL_RAW}. Use stable | preview | dev."
   exit 1
 }
-# G1: the hosted stable build has been failing fresh system-mode installs (relay
-# runtime never healthy) — re-confirmed on the 2026-07-17 LXC matrix. Warn on
-# preset/unattended stable installs too (they skip the channel prompt's note).
-# Remove this once the vendor stable channel serves a working build again.
-if [[ "${HAPPIER_CHANNEL}" == "stable" ]]; then
-  msg_warn "Release channel 'stable': the hosted stable build has recently been failing fresh installs (relay runtime not healthy). If the relay install fails, retry with HAPPIER_PVE_CHANNEL=preview or dev."
-fi
 STACK_PACKAGE="$(printf '%s' "${STACK_PACKAGE_RAW}" | tr -d '\r' | xargs)"
 STACK_PACKAGE="$(channel_default_stack_package "${HAPPIER_CHANNEL}" "${STACK_PACKAGE}")"
 if [[ -z "${STACK_PACKAGE}" ]]; then
@@ -608,7 +601,6 @@ APT_DEPS=(
   curl
   gnupg
   jq
-  minisign
   python3
 )
 if [[ "${INSTALL_METHOD}" == "from_source" ]]; then
@@ -648,29 +640,11 @@ if [[ "${REMOTE_ACCESS}" == "proxy" || "${REMOTE_ACCESS}" == "none" ]]; then
 fi
 
 install_happier_cli_binary() {
-  # Supply chain: the official happier.dev installer is fetched over TLS and piped
-  # to bash (same model as rustup/get.docker.com). The CLI binary it downloads is
-  # verified by that installer; the UI bundle here is minisign + sha256 verified.
-  # The bootstrap script itself is not pinned — accepted risk for the install flow.
   msg_info "Installing Happier CLI — channel: ${HAPPIER_CHANNEL}"
-  # NB: the env overrides MUST prefix the consuming `bash`, not `curl` — an env
-  # prefix applies only to the first command of a pipeline, so putting it on the
-  # curl side hands the bootstrap its $HOME defaults (/root/.happier), which the
-  # happier service user cannot execute.
-  curl -fsSL "https://happier.dev/install" |
-    HAPPIER_PRODUCT="cli" \
-      HAPPIER_INSTALL_DIR="/opt/happier/cli" \
-      HAPPIER_BIN_DIR="/usr/local/bin" \
-      HAPPIER_WITH_DAEMON="0" \
-      HAPPIER_NO_PATH_UPDATE="1" \
-      HAPPIER_NONINTERACTIVE="1" \
-      $STD bash -s -- --channel "${HAPPIER_CHANNEL}"
-
-  # The bootstrap creates INSTALL_DIR mode 700 (it assumes its $HOME/.happier
-  # default, where private is right). With a system-wide /opt path the happier
-  # service user must be able to traverse it to run the CLI.
-  chmod 755 /opt/happier/cli 2>/dev/null || true
-
+  if ! install_happier_cli "${HAPPIER_CHANNEL}"; then
+    msg_error "Happier CLI install failed."
+    exit 1
+  fi
   resolve_installed_cli_path_or_fail
   msg_ok "Installed Happier CLI"
 }
@@ -698,40 +672,23 @@ EOF
 install_managed_relay_runtime() {
   get_lxc_ip
 
-  local relay_args=(relay host install --mode system --channel "${HAPPIER_CHANNEL}")
+  # --yes: since CLI 0.2.16 a local install on a TTY asks follow-up questions
+  # (public address, Tailscale Serve, background service); answer them with the
+  # defaults so the install can never block on a prompt.
+  local relay_args=(relay host install --mode system --channel "${HAPPIER_CHANNEL}" --yes)
   relay_args+=(--env "HAPPIER_SERVER_HOST=${SERVER_HOST}")
   if [[ -n "${SERVER_PORT_RAW}" ]]; then
     relay_args+=(--env "PORT=${HAPPIER_SERVER_PORT}")
-  fi
-  if [[ "${AUTO_UPDATE}" == "1" ]]; then
-    # Capability probe: released CLIs may not know the auto-update flags yet
-    # (`relay host install` rejects unknown arguments). Degrade with a warning
-    # instead of failing the whole install.
-    # Capture help text first, then grep a here-string. Piping the CLI directly
-    # into `grep -q` lets grep's early SIGPIPE close (or a non-zero CLI exit) flip
-    # the result under `set -o pipefail`, silently disabling the user's opt-in.
-    local auto_update_help=""
-    auto_update_help="$("${HAPPIER_CLI_BIN}" relay host install --help 2>&1 || true)"
-    if grep -q -- '--auto-update' <<<"${auto_update_help}"; then
-      relay_args+=(--auto-update --auto-update-at="${AUTO_UPDATE_AT}")
-    else
-      msg_warn "This Happier CLI version does not support --auto-update yet; skipping the auto-update timer (update manually or re-run update after a CLI upgrade)."
-      AUTO_UPDATE="0"
-    fi
   fi
   if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
     relay_args+=(--env "HAPPIER_PUBLIC_SERVER_URL=${PUBLIC_URL}")
   fi
 
-  local ui_current_dir=""
-  if [[ "${SERVE_UI}" == "1" ]]; then
-    msg_info "Installing Happier web UI bundle"
-    ui_current_dir="$(install_managed_ui_bundle "${HAPPIER_CHANNEL}" install)"
-    relay_args+=(--env "HAPPIER_SERVER_UI_DIR=${ui_current_dir}")
-    if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
-      relay_args+=(--env "HAPPIER_WEBAPP_URL=${PUBLIC_URL}")
-    fi
-    msg_ok "Installed Happier web UI bundle"
+  # The relay serves the web UI bundled in its release payload and owns
+  # HAPPIER_SERVER_UI_DIR (overriding it is rejected), so there is no separate UI
+  # download any more; only advertise the proxy origin as the web app URL.
+  if [[ "${REMOTE_ACCESS}" == "proxy" ]]; then
+    relay_args+=(--env "HAPPIER_WEBAPP_URL=${PUBLIC_URL}")
   fi
 
   msg_info "Installing Happier relay host"
@@ -793,7 +750,10 @@ configure_devbox_server_profile() {
   fi
 
   msg_info "Configuring Happier server profile (devbox)"
-  local server_add_args=(server add --name "proxmox" --server-url "${canonical_url}" --use)
+  # --yes: `server add` probes the server and refuses to save an unreachable one;
+  # with autostart off the relay is stopped right now, and with it on it may
+  # still be starting. The profile is correct either way, so save it regardless.
+  local server_add_args=(server add --name "proxmox" --server-url "${canonical_url}" --use --yes)
   if [[ "${canonical_url}" == "${local_api_url}" ]]; then
     :
   else
@@ -806,8 +766,8 @@ configure_devbox_server_profile() {
 
 install_devbox_background_service() {
   # No manual wait-for-auth write needed here: the managed CLI's `service install`
-  # already injects HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH=1 (see @happier-dev/stack
-  # scripts/service.mjs), so the daemon waits for auth while the server/UI stay up.
+  # already sets HAPPIER_DAEMON_WAIT_FOR_AUTH=1 in the unit (apps/cli
+  # daemon/service/plan.ts), so the daemon waits for auth while the server/UI stay up.
   # (The from_source path sets it by hand only because its non-service nohup start
   # does not go through `service install`.)
   msg_info "Installing background service (devbox)"
@@ -976,6 +936,48 @@ write_daemon_env_dropin() {
   fi
 }
 
+# Opt-in daily auto-update: a systemd timer running the engine's /usr/bin/update
+# entrypoint (PHS_SILENT=1 selects the engine's unattended update path), i.e. the
+# exact same CLI self-update + relay reinstall + daemon restart as a manual
+# `update`. The relay CLI has no built-in updater (`--auto-update` only exists in
+# hstack self-host). The chosen time lives in the timer itself, so nothing else
+# has to remember it. Installers only: from_source has no automatic update path.
+AUTO_UPDATE_UNIT="happier-pve-update"
+install_auto_update_timer() {
+  [[ "${AUTO_UPDATE}" == "1" ]] || return 0
+  msg_info "Enabling daily auto-update (${AUTO_UPDATE_AT})"
+  cat >"/etc/systemd/system/${AUTO_UPDATE_UNIT}.service" <<UNIT
+[Unit]
+Description=Happier unattended update (Proxmox helper script)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PHS_SILENT=1
+Environment=TERM=dumb
+ExecStart=/usr/bin/update
+TimeoutStartSec=1h
+UNIT
+  cat >"/etc/systemd/system/${AUTO_UPDATE_UNIT}.timer" <<UNIT
+[Unit]
+Description=Daily Happier update at ${AUTO_UPDATE_AT}
+
+[Timer]
+OnCalendar=*-*-* ${AUTO_UPDATE_AT}:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+  if $STD systemctl daemon-reload && $STD systemctl enable --now "${AUTO_UPDATE_UNIT}.timer"; then
+    msg_ok "Enabled daily auto-update (${AUTO_UPDATE_AT}, log: journalctl -u ${AUTO_UPDATE_UNIT})"
+  else
+    msg_warn "Could not enable ${AUTO_UPDATE_UNIT}.timer; update manually with: update"
+  fi
+}
+
 # Resolve the best client-facing URL to show the user before the QR appears.
 resolve_daemon_auth_server_url() {
   if [[ -n "${TAILSCALE_HTTPS_URL}" ]]; then
@@ -1064,12 +1066,14 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
     write_daemon_env_dropin
   fi
 
+  install_auto_update_timer
+
   # Post-install output: configure server → sign in/create → connect daemon/terminal.
   msg_ok "Install complete"
   RELAY_SERVICE_NAME="$(channel_relay_service_name "${HAPPIER_CHANNEL}")"
   CLIENT_CLI_NAME="${HAPPIER_CLI_NAME}"
 
-  run_daemon_auth_if_requested "${HAPPIER_CLI_BIN}" "${RELAY_SERVICE_NAME}"
+  run_daemon_auth_if_requested "${RELAY_SERVICE_NAME}" "${HAPPIER_CLI_BIN}" auth login --method=mobile --no-open
 
   print_access_urls
   if [[ -z "${TAILSCALE_HTTPS_URL}" && "${REMOTE_ACCESS}" == "tailscale" ]]; then
@@ -1095,7 +1099,7 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   DAEMON_START_CMD=""
   if [[ "${INSTALL_TYPE}" == "devbox" && "${AUTOSTART}" != "1" ]]; then
     # With autostart on, the managed service starts the daemon automatically once
-    # authenticated (HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH); only show a manual start otherwise.
+    # authenticated (HAPPIER_DAEMON_WAIT_FOR_AUTH); only show a manual start otherwise.
     DAEMON_START_CMD="sudo -u happier -H ${CLIENT_CLI_NAME} daemon start"
   fi
   print_next_steps \
@@ -1105,6 +1109,10 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
 
   finish_install
   exit 0
+fi
+
+if [[ "${AUTO_UPDATE}" == "1" ]]; then
+  msg_warn "HAPPIER_PVE_AUTO_UPDATE=1 is ignored for from_source installs (they are updated manually; run 'update' for the steps)."
 fi
 
 SETUP_ENV=()
@@ -1309,7 +1317,7 @@ fi
 # from_source devbox builds a daemon too: provision the agent CLIs and wire the daemon
 # env drop-in, mirroring the installers path. Placed after the stack service is installed
 # and STACK_ENV_FILE is written so the daemon unit exists for drop-in discovery (the helper
-# skips-with-warn if none is found). Auto-update stays relay/installers-only (not added here).
+# skips-with-warn if none is found). Auto-update is installers-only (warned about above).
 if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
   install_devbox_agents
   write_daemon_env_dropin
@@ -1345,7 +1353,7 @@ fi
 
 msg_ok "Install complete"
 
-run_daemon_auth_if_requested "${HSTACK_BIN}" "${STACK_LABEL}.service"
+run_daemon_auth_if_requested "${STACK_LABEL}.service" "${HSTACK_BIN}" auth login --method=mobile --no-open --start-if-needed
 
 print_access_urls
 if [[ -z "${TAILSCALE_HTTPS_URL}" && "${REMOTE_ACCESS}" == "tailscale" ]]; then

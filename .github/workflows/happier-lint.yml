@@ -101,11 +101,8 @@ jobs:
         continue-on-error: true
         run: shfmt -i 2 -ci -d $HAPPIER_SCRIPTS tests/happier/*.sh
 
-      - name: happier test suite (channel helpers, validators, UI-bundle verify)
-        run: |
-          # minisign enables the real-crypto tier of the UI-bundle verify tests.
-          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
-          bash tests/happier/run.sh
+      - name: happier test suite (channel helpers, validators, update path)
+        run: bash tests/happier/run.sh
 
       - name: json twins byte-identical (json/ vs frontend/public/json/)
         run: |

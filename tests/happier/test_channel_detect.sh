@@ -11,7 +11,6 @@ msg_warn() { :; }
 msg_error() { echo "ERR: $*" >&2; }
 msg_info() { :; }
 msg_ok() { :; }
-export HAPPIER_MINISIGN_PUBKEY="test-key-placeholder"
 # shellcheck disable=SC1091 # unit under test, resolved at runtime
 source ../../misc/happier-common.func
 

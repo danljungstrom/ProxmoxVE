@@ -40,20 +40,22 @@ test_channel_suffix_and_derived_paths() {
   assert_eq "$(channel_config_env_path stable)" "/etc/happier/server.env" "stable env path"
   assert_eq "$(channel_config_env_path dev)" "/etc/happier-dev/server.env" "dev env path"
   assert_eq "$(channel_state_path preview)" "/opt/happier-preview/self-host-state.json" "preview state"
-  assert_eq "$(channel_ui_current_dir stable)" "/var/lib/happier/ui-web/current" "stable ui dir"
   assert_fail "bad channel relay rejected" channel_relay_service_name bogus
 }
 
 test_channel_hosted_webapp_url() {
-  assert_eq "$(channel_hosted_webapp_url stable)" "https://app.happier.dev" "stable webapp"
-  assert_eq "$(channel_hosted_webapp_url preview)" "https://app.happier.dev" "preview webapp"
+  assert_eq "$(channel_hosted_webapp_url stable)" "https://cloud.happier.dev" "stable webapp"
+  assert_eq "$(channel_hosted_webapp_url preview)" "https://cloud.happier.dev" "preview webapp"
   assert_eq "$(channel_hosted_webapp_url dev)" "" "dev has no hosted webapp"
 }
 
-test_ui_release_tags_for_channel() {
-  assert_eq "$(ui_release_tags_for_channel stable)" "ui-web-stable" "stable tags"
-  assert_eq "$(ui_release_tags_for_channel preview)" $'ui-web-preview\nui-web-stable' "preview fallback chain"
-  assert_eq "$(ui_release_tags_for_channel dev)" $'ui-web-dev\nui-web-preview\nui-web-stable' "dev fallback chain"
+test_normalize_install_method() {
+  assert_eq "$(normalize_install_method "")" "installers" "empty->installers"
+  assert_eq "$(normalize_install_method "Installers")" "installers" "case-insensitive"
+  assert_eq "$(normalize_install_method "selfhost")" "installers" "selfhost alias"
+  assert_eq "$(normalize_install_method " from-source ")" "from_source" "from-source alias, trimmed"
+  assert_eq "$(normalize_install_method "legacy")" "from_source" "legacy alias"
+  assert_fail "unknown method rejected" normalize_install_method "docker"
 }
 
 test_channel_default_stack_package() {
