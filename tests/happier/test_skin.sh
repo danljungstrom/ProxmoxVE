@@ -21,6 +21,7 @@ trap 'rm -rf "${SB}"' EXIT
 cat >"${SB}/whiptail" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"${WT_LOG}"
+printf '%s\n' "${TERMINFO:-}" >"${WT_LOG}.terminfo"
 exit "${FAKE_WT_RC:-0}"
 EOF
 chmod +x "${SB}/whiptail"
@@ -113,6 +114,21 @@ test_newt_colors_preset_wins() {
   assert_eq "$(TERM=xterm-256color in_engine 'happier_apply_skin; printf "%s" "$NEWT_COLORS"' | cut -c1-25)" "root=color255,color233;ro" "256-color palette"
   assert_eq "$(TERM=linux COLORTERM='' in_engine 'tput() { echo 8; }; happier_apply_skin; printf "%s" "$NEWT_COLORS"' | cut -c1-16)" "root=white,black" "16-color fallback"
   assert_eq "$(NEWT_COLORS="root=red,red" in_engine 'happier_apply_skin; printf "%s" "$NEWT_COLORS"')" "root=red,red" "user palette kept"
+}
+
+test_dialog_run_drops_the_alternate_screen() {
+  if ! command -v infocmp >/dev/null 2>&1 || ! command -v tic >/dev/null 2>&1; then
+    skip "no infocmp/tic"
+    return 0
+  fi
+  local out
+  out="$(TERM=xterm-256color in_engine 'header_info() { echo HEADER; }; happier_apply_skin; happier_dialogs_begin; d="$HAPPIER_DIALOG_TERMINFO"; whiptail --msgbox hi 8 30; infocmp -x xterm-256color 2>/dev/null | grep -c smcup || true; TERMINFO="$d" infocmp -x xterm-256color | grep -c smcup || true; happier_dialogs_end; [[ -e "$d" ]] && echo leaked || echo cleaned')"
+  assert_eq "${out}" $'1\n0\nHEADER\ncleaned' "copy has no smcup; banner redrawn; temp terminfo removed"
+  assert_ok "whiptail ran against the copy" grep -q 'happier-terminfo' "${WT_LOG}.terminfo"
+  out="$(TERM=xterm-256color in_engine 'header_info() { echo HEADER; }; happier_apply_skin; happier_dialogs_begin; happier_dialogs_end; echo done')"
+  assert_eq "${out}" "done" "no dialog shown -> no banner redraw"
+  in_engine 'happier_apply_skin; whiptail --msgbox hi 8 30'
+  assert_eq "$(cat "${WT_LOG}.terminfo")" "" "outside a dialog run: stock terminfo"
 }
 
 # The overridden names must still exist at the pinned engine ref. Network test:

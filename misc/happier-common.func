@@ -432,6 +432,40 @@ _happier_update_menu_arg() {
   esac
 }
 
+# Flicker-free dialog runs. whiptail (newt/S-Lang) switches to the terminal's
+# alternate screen per dialog and back on exit, so a run of dialogs flashes the
+# normal screen (the banner) between every pick. Between happier_dialogs_begin
+# and _end the wrapper points whiptail at a terminfo copy of $TERM without the
+# smcup/rmcup switch: each dialog stays painted until the next one replaces it,
+# and _end redraws the banner over the last one. Best effort: without
+# infocmp/tic (ncurses-bin) the dialogs simply keep the stock behavior.
+happier_dialogs_begin() {
+  HAPPIER_DIALOG_TERMINFO=""
+  [[ "${HAPPIER_PVE_SKIN:-1}" == "0" ]] && return 0
+  command -v infocmp >/dev/null 2>&1 && command -v tic >/dev/null 2>&1 || return 0
+  local dir=""
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/happier-terminfo.XXXXXX" 2>/dev/null)" || return 0
+  if infocmp -x "${TERM:-xterm}" 2>/dev/null | sed -E 's/(^|[[:space:]])(smcup|rmcup)=[^,]*,//g' >"${dir}/src" &&
+    tic -x -o "${dir}" "${dir}/src" >/dev/null 2>&1; then
+    HAPPIER_DIALOG_TERMINFO="${dir}"
+  else
+    rm -rf "${dir}"
+  fi
+  return 0
+}
+
+happier_dialogs_end() {
+  local dir="${HAPPIER_DIALOG_TERMINFO:-}"
+  HAPPIER_DIALOG_TERMINFO=""
+  [[ -n "${dir}" ]] || return 0
+  # Only if a dialog actually drew (the wrapper may run in a subshell, so it
+  # leaves a marker file rather than setting a variable).
+  if [[ -e "${dir}/shown" ]] && declare -f header_info >/dev/null 2>&1; then
+    header_info
+  fi
+  rm -rf "${dir}"
+}
+
 # Install the skin over the already-loaded engine. Call once, right after this
 # file is sourced (host and container). No-op without the engine (tests).
 # shellcheck disable=SC2034,SC2317 # engine globals; overrides the engine calls
@@ -469,6 +503,11 @@ happier_apply_skin() {
       ((update_menu)) && arg="$(_happier_update_menu_arg "${arg}")"
       args+=("${arg}")
     done
+    if [[ -n "${HAPPIER_DIALOG_TERMINFO:-}" ]]; then
+      : >"${HAPPIER_DIALOG_TERMINFO}/shown" 2>/dev/null || true
+      TERMINFO="${HAPPIER_DIALOG_TERMINFO}" command whiptail "${args[@]}"
+      return
+    fi
     command whiptail "${args[@]}"
   }
   if [[ -z "${NEWT_COLORS:-}" ]]; then

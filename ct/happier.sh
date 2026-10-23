@@ -473,7 +473,9 @@ function app_questions() {
 }
 
 if command -v pveversion >/dev/null 2>&1; then
+  happier_dialogs_begin
   app_questions
+  happier_dialogs_end
 fi
 
 start
