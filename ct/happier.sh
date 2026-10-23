@@ -285,8 +285,8 @@ function app_questions() {
     HAPPIER_PVE_INSTALL_TYPE=$(
       whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --radiolist \
         "\nSelect installation type:\n" 12 72 2 \
-        "devbox" "Dev box (server-light + daemon) (recommended)" ON \
-        "server_only" "Server only (no daemon)" OFF \
+        "devbox" "All-in-one: relay + agent daemon in this container" ON \
+        "server_only" "Relay only: run daemons on your other machines" OFF \
         3>&1 1>&2 2>&3
     ) || exit_script
   fi
@@ -335,9 +335,9 @@ function app_questions() {
     HAPPIER_PVE_REMOTE_ACCESS=$(
       whiptail --backtitle "${BACKTITLE}" --title "HAPPIER" --radiolist \
         "\nServer URL for QR/deep links (choose how other devices will reach this server):\n" 16 72 3 \
-        "tailscale" "Tailscale HTTPS URL (recommended; works from your phone)" ON \
-        "proxy" "Custom HTTPS URL (reverse proxy; works from your phone)" OFF \
-        "none" "LAN-only (HTTP; not reachable off-LAN)" OFF \
+        "tailscale" "HTTPS via Tailscale Serve (easiest; phone-ready)" ON \
+        "proxy" "HTTPS via your own reverse proxy (phone-ready)" OFF \
+        "none" "LAN only, plain HTTP (no access from outside)" OFF \
         3>&1 1>&2 2>&3
     ) || exit_script
 
