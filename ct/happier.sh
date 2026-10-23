@@ -233,7 +233,12 @@ function update_script() {
     exit 0
   fi
 
-  msg_error "No ${APP} installation found."
+  # Off a PVE host the engine always takes the update path, so running the
+  # install one-liner in the wrong shell (any other LXC) lands here.
+  msg_error "No ${APP} installation found in this container."
+  echo -e "${TAB}This script updates an existing ${APP} container when run inside it."
+  echo -e "${TAB}To create a new ${APP} container, run it in the Proxmox VE host shell"
+  echo -e "${TAB}(web UI: select the node > Shell)."
   exit 1
 }
 
