@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -35,16 +36,11 @@ function update_script() {
     systemctl stop kan
     msg_ok "Stopped Service"
 
-    msg_info "Backing up Data"
-    cp /opt/kan/.env /opt/kan.env.bak
-    msg_ok "Backed up Data"
+    create_backup /opt/kan/.env
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_tag "kan" "kanbn/kan" "latest"
 
-    msg_info "Restoring Configuration"
-    cp /opt/kan.env.bak /opt/kan/.env
-    rm -f /opt/kan.env.bak
-    msg_ok "Restored Configuration"
+    restore_backup
 
     msg_info "Building Application"
     cd /opt/kan

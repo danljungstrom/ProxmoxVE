@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: miviro
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -30,7 +31,6 @@ function update_script() {
     exit
   fi
 
-  
   if check_for_gh_release "hev-socks5-server" "heiher/hev-socks5-server"; then
     msg_info "Stopping Service"
     systemctl stop hev-socks5-server
@@ -52,6 +52,6 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it with a SOCKS5 client using the following URL:${CL}"
+echo -e "${INFO}${YW}Access it with a SOCKS5 client using the following URL:${CL}"
 echo -e "${GATEWAY}${BGN}${IP}:1080${CL}"
 echo -e "${INFO}${YW} and the credentials stored at /root/hev.creds${CL}"

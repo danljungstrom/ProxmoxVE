@@ -7,19 +7,24 @@
 
 if ! command -v curl &>/dev/null; then
   printf "\r\e[2K%b" '\033[93m Setup Source \033[m' >&2
-  apt-get update >/dev/null 2>&1
-  apt-get install -y curl >/dev/null 2>&1
+  if [[ -f /etc/alpine-release ]]; then
+    apk update >/dev/null 2>&1
+    apk add --no-cache curl >/dev/null 2>&1
+  else
+    apt-get update >/dev/null 2>&1
+    apt-get install -y curl >/dev/null 2>&1
+  fi
 fi
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/core.func)
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/tools.func)
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/error_handler.func)
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
+source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/core.func")
+source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/lib/tools.func")
+source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/error_handler.func")
+source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/api/api.func") 2>/dev/null || true
 
 # Enable error handling
 set -Eeuo pipefail
 trap 'error_handler' ERR
 load_functions
-init_tool_telemetry "" "addon"
+declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "homebrew" "addon"
 
 # ==============================================================================
 # CONFIGURATION
@@ -29,18 +34,7 @@ APP="homebrew"
 APP_TYPE="tools"
 INSTALL_PATH="/home/linuxbrew/.linuxbrew"
 
-# ==============================================================================
-# OS DETECTION
-# ==============================================================================
-if [[ -f "/etc/alpine-release" ]]; then
-  echo -e "${CROSS} Alpine is not supported by Homebrew. Exiting."
-  exit 1
-elif grep -qE 'ID=debian|ID=ubuntu' /etc/os-release; then
-  OS="Debian"
-else
-  echo -e "${CROSS} Unsupported OS detected. Exiting."
-  exit 1
-fi
+require_debian_like
 
 # ==============================================================================
 # UNINSTALL
@@ -81,7 +75,7 @@ function install() {
       msg_ok "Created user 'brew'"
     else
       msg_error "Cannot install Homebrew without a non-root user. Exiting."
-      exit 1
+      exit 254
     fi
   fi
   msg_ok "Detected User: $BREW_USER"

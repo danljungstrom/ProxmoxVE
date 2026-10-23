@@ -21,7 +21,7 @@ $STD apt install -y \
 msg_ok "Installed Dependencies"
 
 MONGO_VERSION="8.0" setup_mongodb
-NODE_VERSION="22" setup_nodejs
+NODE_VERSION="24" setup_nodejs
 fetch_and_deploy_gh_release "checkmate" "bluewave-labs/Checkmate" "tarball"
 
 msg_info "Configuring Checkmate"
@@ -122,9 +122,7 @@ server {
   }
 }
 EOF
-ln -sf /etc/nginx/sites-available/checkmate /etc/nginx/sites-enabled/checkmate
-rm -f /etc/nginx/sites-enabled/default
-$STD systemctl reload nginx
+nginx_enable_site checkmate
 msg_ok "Configured Nginx Reverse Proxy"
 
 motd_ssh

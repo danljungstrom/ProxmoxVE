@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -29,32 +30,31 @@ function update_script() {
     exit
   fi
 
-  NODE_VERSION="24" NODE_MODULE="yarn,node-gyp" setup_nodejs
+  NODE_VERSION="26" NODE_MODULE="yarn,node-gyp" setup_nodejs
 
-  if check_for_gh_release "wikijs" "requarks/wiki"; then
-    msg_info "Verifying whether ${APP}' new release is v3.x+ and current install uses SQLite."
-    SQLITE_INSTALL=$([ -f /opt/wikijs/db.sqlite ] && echo "true" || echo "false")
-    if [[ "${SQLITE_INSTALL}" == "true" && "${CHECK_UPDATE_RELEASE}" =~ ^3.* ]]; then
-      echo "SQLite is not supported in v3.x+, currently there is no update path availble."
-      exit
-    fi
-    msg_ok "There is an update path available for ${APP}"
+  if check_for_gh_release "wikijs" "requarks/wiki-v2"; then
+    # Installs before February 2025 use SQLite, newer ones PostgreSQL
+    SQLITE_INSTALL=$([[ -f /opt/wikijs/db.sqlite ]] && echo "true" || echo "false")
 
     msg_info "Stopping Service"
     systemctl stop wikijs
     msg_ok "Stopped Service"
 
     msg_info "Backing up Data"
-    mkdir /opt/wikijs-backup
-    $SQLITE_INSTALL && cp /opt/wikijs/db.sqlite /opt/wikijs-backup
+    mkdir -p /opt/wikijs-backup
+    if [[ "$SQLITE_INSTALL" == "true" ]]; then
+      cp /opt/wikijs/db.sqlite /opt/wikijs-backup
+    fi
     cp -R /opt/wikijs/{config.yml,/data} /opt/wikijs-backup
     msg_ok "Backed up Data"
 
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "wikijs" "requarks/wiki" "prebuild" "latest" "/opt/wikijs" "wiki-js.tar.gz"
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "wikijs" "requarks/wiki-v2" "prebuild" "latest" "/opt/wikijs" "wiki-js.tar.gz"
 
     msg_info "Restoring Data"
     cp -R /opt/wikijs-backup/* /opt/wikijs
-    $SQLITE_INSTALL && $STD npm rebuild sqlite3
+    if [[ "$SQLITE_INSTALL" == "true" ]]; then
+      $STD npm rebuild sqlite3
+    fi
     rm -rf /opt/wikijs-backup
     msg_ok "Restored Data"
 

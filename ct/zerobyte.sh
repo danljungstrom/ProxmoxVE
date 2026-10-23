@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: community-scripts
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -35,13 +36,17 @@ function update_script() {
     systemctl stop zerobyte
     msg_ok "Stopped Service"
 
-    msg_info "Backing up Configuration"
-    cp /opt/zerobyte/.env /opt/zerobyte.env.bak
-    msg_ok "Backed up Configuration"
+    create_backup /opt/zerobyte/.env
     
     ensure_dependencies git
     NODE_VERSION="24" setup_nodejs
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "zerobyte" "nicotsx/zerobyte" "tarball"
+
+    restore_backup
+
+    msg_info "Updating Bun"
+    $STD bun upgrade
+    msg_ok "Updated Bun"
 
     msg_info "Building Zerobyte"
     export NODE_OPTIONS="--max-old-space-size=3072"
@@ -49,11 +54,6 @@ function update_script() {
     $STD bun install
     $STD node ./node_modules/vite/bin/vite.js build
     msg_ok "Built Zerobyte"
-
-    msg_info "Restoring Configuration"
-    cp /opt/zerobyte.env.bak /opt/zerobyte/.env
-    rm -f /opt/zerobyte.env.bak
-    msg_ok "Restored Configuration"
 
     msg_info "Starting Service"
     systemctl start zerobyte

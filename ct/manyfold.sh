@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: bvdberg01 | Co-Author: SunFlowerOwl
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -30,8 +31,19 @@ function update_script() {
   fi
 
   NODE_VERSION="24" NODE_MODULE="corepack,yarn" setup_nodejs
-  ensure_dependencies f3d
-  
+  if [[ "$(arch_resolve)" == "amd64" ]]; then
+    if check_for_gh_release "f3d" "f3d-app/f3d"; then
+      $STD apt install -y libegl1 libx11-6
+      CLEAN_INSTALL=1 fetch_and_deploy_gh_release "f3d" "f3d-app/f3d" "prebuild" "latest" "/opt/f3d" "F3D-*-Linux-x86_64.tar.gz"
+      ln -sf /opt/f3d/bin/f3d /usr/local/bin/f3d
+      if dpkg -s f3d &>/dev/null; then
+        $STD apt purge -y f3d
+      fi
+    fi
+  else
+    ensure_dependencies f3d
+  fi
+
   if check_for_gh_release "manyfold" "manyfold3d/manyfold"; then
     msg_info "Stopping Services"
     systemctl stop manyfold.target manyfold-rails.1 manyfold-default_worker.1 manyfold-performance_worker.1
@@ -39,12 +51,14 @@ function update_script() {
 
     msg_info "Backing up Data"
     CURRENT_VERSION=$(grep -oP 'APP_VERSION=\K[^ ]+' /opt/manyfold/.env || echo "unknown")
-    cp -r /opt/manyfold/app/storage /opt/manyfold_storage_backup 2>/dev/null || true
-    cp -r /opt/manyfold/app/tmp /opt/manyfold_tmp_backup 2>/dev/null || true
     $STD tar -czf "/opt/manyfold_${CURRENT_VERSION}_backup.tar.gz" -C /opt/manyfold app
     msg_ok "Backed up Data"
 
+    create_backup /opt/manyfold/app/storage /opt/manyfold/app/tmp
+
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "manyfold" "manyfold3d/manyfold" "tarball" "latest" "/opt/manyfold/app"
+
+    restore_backup
 
     msg_info "Configuring Manyfold"
     RUBY_INSTALL_VERSION=$(cat /opt/manyfold/app/.ruby-version)
@@ -55,14 +69,9 @@ function update_script() {
 
     RUBY_VERSION=${RUBY_INSTALL_VERSION} RUBY_INSTALL_RAILS="true" HOME=/home/manyfold setup_ruby
 
-    msg_info "Restoring Data"
-    rm -rf /opt/manyfold/app/{storage,tmp}
-    cp -r /opt/manyfold_storage_backup /opt/manyfold/app/storage 2>/dev/null || true
-    cp -r /opt/manyfold_tmp_backup /opt/manyfold/app/tmp 2>/dev/null || true
+    msg_info "Setting Permissions"
     chown -R manyfold:manyfold {/home/manyfold,/opt/manyfold}
-    chown -R manyfold:manyfold /opt/manyfold/app/storage /opt/manyfold/app/tmp /opt/manyfold/app/config
-    rm -rf /opt/manyfold_storage_backup /opt/manyfold_tmp_backup
-    msg_ok "Restored Data"
+    msg_ok "Set Permissions"
 
     msg_info "Installing Manyfold"
 

@@ -50,8 +50,8 @@ URIs: https://www.collaboraoffice.com/repos/CollaboraOnline/CODE-deb
 Suites: ./
 Signed-By: /etc/apt/keyrings/collaboraonline-release-keyring.gpg
 EOF
-$STD apt-get update
-$STD apt-get install -y coolwsd code-brand
+apt_update_safe
+$STD apt install -y coolwsd code-brand
 systemctl stop coolwsd
 mkdir -p /etc/systemd/system/coolwsd.service.d
 cat <<EOF >/etc/systemd/system/coolwsd.service.d/override.conf
@@ -64,7 +64,7 @@ $STD sudo -u cool coolconfig set-admin-password --user=admin --password="$COOLPA
 echo "$COOLPASS" >~/.coolpass
 msg_ok "Installed Collabora Online"
 
-fetch_and_deploy_gh_release "OpenCloud" "opencloud-eu/opencloud" "singlefile" "v7.0.0" "/usr/bin" "opencloud-*-linux-$(arch_resolve)"
+fetch_and_deploy_gh_release "OpenCloud" "opencloud-eu/opencloud" "singlefile" "v8.1.0" "/usr/bin" "opencloud-*-linux-$(arch_resolve)"
 mv /usr/bin/OpenCloud /usr/bin/opencloud
 
 msg_info "Configuring OpenCloud"
@@ -207,7 +207,7 @@ EOF
 $STD sudo -u cool coolconfig set ssl.enable false
 $STD sudo -u cool coolconfig set ssl.termination true
 $STD sudo -u cool coolconfig set ssl.ssl_verification true
-sed -i "s|-Policy\">|&frame-ancestors https://${OPENCLOUD_FQDN}|" /etc/coolwsd/coolwsd.xml
+$STD sudo -u cool coolconfig set net.frame_ancestors "https://${OPENCLOUD_FQDN}"
 useradd -r -M -s /usr/sbin/nologin opencloud
 chown -R opencloud:opencloud "$CONFIG_DIR" "$DATA_DIR"
 sudo -u opencloud opencloud init --config-path "$CONFIG_DIR" --insecure no

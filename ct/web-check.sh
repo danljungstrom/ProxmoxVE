@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: CrazyWolf13
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -34,16 +35,12 @@ function update_script() {
     systemctl stop web-check
     msg_ok "Stopped Service"
 
-    msg_info "Creating backup"
-    mv /opt/web-check/.env /opt
-    msg_ok "Created backup"
+    create_backup /opt/web-check/.env
 
     NODE_VERSION="22" NODE_MODULE="yarn" setup_nodejs
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "web-check" "Lissy93/web-check" "tarball"
 
-    msg_info "Restoring backup"
-    mv /opt/.env /opt/web-check
-    msg_ok "Restored backup"
+    restore_backup
 
     msg_info "Building Web-Check"
     cd /opt/web-check 

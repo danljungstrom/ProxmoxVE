@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://git.community-scripts.org/community-scripts/ProxmoxVE/raw/branch/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Authors: MickLesk (CanbiZ) | Co-Author: remz1337
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -8,8 +9,8 @@ source <(curl -fsSL https://git.community-scripts.org/community-scripts/ProxmoxV
 APP="Frigate"
 var_tags="${var_tags:-nvr}"
 var_cpu="${var_cpu:-8}"
-var_ram="${var_ram:-4096}"
-var_disk="${var_disk:-20}"
+var_ram="${var_ram:-6144}"
+var_disk="${var_disk:-25}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-12}"
 var_arm64="${var_arm64:-no}"

@@ -45,7 +45,7 @@ msg_error() {
 }
 
 # Telemetry
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func) 2>/dev/null || true
+source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/api/api.func") 2>/dev/null || true
 declare -f init_tool_telemetry &>/dev/null && init_tool_telemetry "pve8-upgrade" "pve"
 
 start_routines() {
@@ -70,7 +70,7 @@ EOF
   whiptail --backtitle "Proxmox VE Helper Scripts" --msgbox --title "PVE8-NO-SUBSCRIPTION" "The 'pve-no-subscription' repository provides access to all of the open-source components of Proxmox VE." 10 58
   msg_info "Enabling 'pve-no-subscription' repository"
   cat <<EOF >/etc/apt/sources.list.d/pve-install-repo.list
-deb https://download.proxmox.com/debian/pve bookworm pve-no-subscription
+deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription
 EOF
   msg_ok "Enabled 'pve-no-subscription' repository"
 

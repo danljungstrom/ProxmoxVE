@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: pajjski
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -29,28 +30,19 @@ function update_script() {
     msg_error "No ${APP} Installation Found!"
     exit
   fi
-
-  if check_for_gh_release "ownfoil" "a1ex4/ownfoil"; then
+  RELEASE="2.3.0"
+  if check_for_gh_release "ownfoil" "a1ex4/ownfoil"  "${RELEASE}" "pinned until 2.4.0 (coming soon) is tested, possible Breaking Changes."; then
     msg_info "Stopping Service"
     systemctl stop ownfoil
     msg_ok "Stopped Service"
 
-    msg_info "Backing up Data"
-    cp -r /opt/ownfoil/app/config /opt/ownfoil_data_backup
-    msg_ok "Backed up Data"
-
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "ownfoil" "a1ex4/ownfoil" "tarball"
+    CLEAN_INSTALL=1 CLEAN_INSTALL_KEEP="app/config" fetch_and_deploy_gh_release "ownfoil" "a1ex4/ownfoil" "tarball" "${RELEASE}"
 
     msg_info "Installing Dependencies"
     cd /opt/ownfoil
     $STD source .venv/bin/activate
     $STD uv pip install -r requirements.txt
     msg_ok "Installed Dependencies"
-
-    msg_info "Restoring Data"
-    cp -r /opt/ownfoil_data_backup /opt/ownfoil/app/config
-    rm -rf /opt/ownfoil_data_backup
-    msg_ok "Restored Data"
 
     msg_info "Starting Service"
     systemctl start ownfoil

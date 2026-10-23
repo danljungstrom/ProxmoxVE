@@ -93,7 +93,7 @@ This project runs on community contributions. Whether you want to write new scri
 
 | I want to…                            | Go here                                                                                           |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Add a **new** script                  | [ProxmoxVED](https://github.com/community-scripts/ProxmoxVED) — new scripts are tested here first |
+| Add a **new** script                  | [DevScripts](https://github.com/community-scripts/DevScripts) — new scripts are tested here first |
 | Fix or improve an **existing** script | [Contributing Guidelines](CONTRIBUTING.md) — open a PR in this repo                               |
 | Report a bug or broken script         | [Issues](https://github.com/community-scripts/ProxmoxVE/issues)                                   |
 | Request a new script or feature       | [Discussions](https://github.com/community-scripts/ProxmoxVE/discussions)                         |
@@ -102,7 +102,7 @@ This project runs on community contributions. Whether you want to write new scri
 
 ### Before you open a PR
 
-- **New scripts go to [ProxmoxVED](https://github.com/community-scripts/ProxmoxVED), not here.** PRs with new scripts opened directly against this repo will be closed.
+- **New scripts go to [DevScripts](https://github.com/community-scripts/DevScripts), not here.** PRs with new scripts opened directly against this repo will be closed.
 - Bug fixes and improvements to existing scripts belong in this repo — read the [Contributing Guidelines](CONTRIBUTING.md) first.
 - Keep PRs focused. One fix or feature per PR.
 - Document what your script installs and any non-obvious decisions in the corresponding JSON metadata file.
@@ -171,11 +171,21 @@ This project runs on community contributions. Whether you want to write new scri
 </p>
 
 <p align="center">
-  <a href="https://star-history.com/#community-scripts/ProxmoxVE&Date">
+  <a href="https://www.star-history.com/?repos=community-scripts%2FProxmoxVE&type=date&legend=top-left">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=community-scripts/ProxmoxVE&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=community-scripts/ProxmoxVE&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=community-scripts/ProxmoxVE&type=Date" width="700" />
+      <source
+        media="(prefers-color-scheme: dark)"
+        srcset="https://api.star-history.com/chart?repos=community-scripts/ProxmoxVE&type=date&theme=dark&legend=top-left&sealed_token=-lUy2KH6pJryUyLCbiWRwFz3ilXMDFVFHm0lJcqh-Hl5e0QNNKjINNcXzULhaZVpBugN_TDaxOawEAuzwBc5Sjqa2mCRw9K6TdCioKRDsS_qXUwhkLQSCMRSg1schCdl4rQD8qEj7PWBjin-fyHnDm7NnM6akZp59jndG7qV7PrvG8nLBgDIuuA-wAI3"
+      />
+      <source
+        media="(prefers-color-scheme: light)"
+        srcset="https://api.star-history.com/chart?repos=community-scripts/ProxmoxVE&type=date&legend=top-left&sealed_token=-lUy2KH6pJryUyLCbiWRwFz3ilXMDFVFHm0lJcqh-Hl5e0QNNKjINNcXzULhaZVpBugN_TDaxOawEAuzwBc5Sjqa2mCRw9K6TdCioKRDsS_qXUwhkLQSCMRSg1schCdl4rQD8qEj7PWBjin-fyHnDm7NnM6akZp59jndG7qV7PrvG8nLBgDIuuA-wAI3"
+      />
+      <img
+        alt="Star History Chart"
+        src="https://api.star-history.com/chart?repos=community-scripts/ProxmoxVE&type=date&legend=top-left&sealed_token=-lUy2KH6pJryUyLCbiWRwFz3ilXMDFVFHm0lJcqh-Hl5e0QNNKjINNcXzULhaZVpBugN_TDaxOawEAuzwBc5Sjqa2mCRw9K6TdCioKRDsS_qXUwhkLQSCMRSg1schCdl4rQD8qEj7PWBjin-fyHnDm7NnM6akZp59jndG7qV7PrvG8nLBgDIuuA-wAI3"
+        width="700"
+      />
     </picture>
   </a>
 </p>

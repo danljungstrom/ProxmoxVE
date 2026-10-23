@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: jkrgr0
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -31,7 +32,7 @@ function update_script() {
   fi
   setup_mariadb
   if check_for_gh_release "2fauth" "Bubka/2FAuth"; then
-    $STD apt update
+    apt_update_safe
     $STD apt -y upgrade
 
     msg_info "Creating Backup"
@@ -60,6 +61,7 @@ function update_script() {
     php artisan 2fauth:install
     chown -R www-data: /opt/2fauth
     chmod -R 755 /opt/2fauth
+    $STD php artisan 2fauth:fix-passport-key-permissions
     $STD systemctl restart php8.4-fpm
     $STD systemctl restart nginx
     msg_ok "Configured 2FAuth"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -83,18 +84,18 @@ function update_script() {
   curl -fsSL "$ZABBIX_DEB_URL" -o /tmp/"$ZABBIX_DEB_FILE"
   $STD dpkg -i /tmp/"$ZABBIX_DEB_FILE"
   rm -rf /tmp/zabbix-release_*.deb
-  $STD apt update
+  apt_update_safe
 
-  $STD apt install --only-upgrade zabbix-server-pgsql zabbix-frontend-php php8.4-pgsql
+  $STD apt install --only-upgrade -y zabbix-server-pgsql zabbix-frontend-php php8.4-pgsql
 
   if [[ "$AGENT_SERVICE" == "zabbix-agent2" ]]; then
-    $STD apt install --only-upgrade zabbix-agent2 zabbix-agent2-plugin-postgresql
+    $STD apt install --only-upgrade -y zabbix-agent2 zabbix-agent2-plugin-postgresql
     if [ -f /etc/zabbix/zabbix_agent2.d/plugins.d/nvidia.conf ]; then
       sed -i 's|^Plugins.NVIDIA.System.Path=.*|# Plugins.NVIDIA.System.Path=/usr/libexec/zabbix/zabbix-agent2-plugin-nvidia-gpu|' \
         /etc/zabbix/zabbix_agent2.d/plugins.d/nvidia.conf
     fi
   elif [[ "$AGENT_SERVICE" == "zabbix-agent" ]]; then
-    $STD apt install --only-upgrade zabbix-agent
+    $STD apt install --only-upgrade -y zabbix-agent
   fi
 
   if command -v fping >/dev/null 2>&1; then

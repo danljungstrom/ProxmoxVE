@@ -25,7 +25,8 @@ $STD apt install -y \
   rrdtool \
   snmp \
   snmpd \
-  whois
+  whois \
+  ipmitool
 msg_ok "Installed Dependencies"
 
 msg_info "Installing Python Dependencies"
@@ -44,7 +45,7 @@ PHP_VERSION="8.4" PHP_FPM="YES" PHP_MODULE="cli,snmp,gmp" setup_php
 setup_mariadb
 setup_composer
 PYTHON_VERSION="3.13" setup_uv
-MARIADB_DB_NAME="librenms" MARIADB_DB_USER="librenms" MARIADB_DB_PASS="$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | head -c13)" setup_mariadb_db
+MARIADB_DB_NAME="librenms" MARIADB_DB_USER="librenms" MARIADB_DB_PASS="$(random_password 13)" setup_mariadb_db
 fetch_and_deploy_gh_release "librenms" "librenms/librenms" "tarball"
 
 msg_info "Configuring LibreNMS"
@@ -80,7 +81,7 @@ sed -i "s/listen = \/run\/php\/php8.4-fpm.sock/listen = \/run\/php-fpm-librenms.
 msg_ok "Configured PHP-FPM"
 
 msg_info "Configure Nginx"
-cat <<EOF >/etc/nginx/sites-enabled/librenms
+cat <<EOF >/etc/nginx/sites-available/librenms
 server {
  listen      80;
  server_name ${LOCAL_IP};
@@ -103,8 +104,7 @@ server {
  }
 }
 EOF
-rm /etc/nginx/sites-enabled/default
-$STD systemctl reload nginx
+nginx_enable_site librenms
 systemctl restart php8.4-fpm
 msg_ok "Configured Nginx"
 
@@ -114,13 +114,13 @@ mkdir -p /etc/bash_completion.d/
 cp /opt/librenms/misc/lnms-completion.bash /etc/bash_completion.d/
 cp /opt/librenms/snmpd.conf.example /etc/snmp/snmpd.conf
 
-APP_PASSWORD=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | head -c13)
+APP_PASSWORD=$(random_password 13)
 APP_USER="admin"
-{
-  echo "LibreNMS Credentials"
-  echo "Username: ${APP_USER}"
-  echo "Password: ${APP_PASSWORD}"
-} >>~/librenms.creds
+cat <<EOF >~/librenms.creds
+LibreNMS Credentials
+Username: ${APP_USER}
+Password: ${APP_PASSWORD}
+EOF
 
 $STD su - librenms -s /bin/bash -c "cd /opt/librenms && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev"
 $STD su - librenms -s /bin/bash -c "cd /opt/librenms && php8.4 artisan migrate --force"
@@ -128,8 +128,8 @@ $STD su - librenms -s /bin/bash -c "cd /opt/librenms && php8.4 artisan key:gener
 $STD su - librenms -s /bin/bash -c "cd /opt/librenms && lnms db:seed --force"
 $STD su - librenms -s /bin/bash -c "cd /opt/librenms && lnms user:add -p ${APP_PASSWORD} ${APP_USER} --role=admin"
 
-RANDOM_STRING=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9')
-sed -i "s/RANDOMSTRINGHERE/$RANDOM_STRING/g" /etc/snmp/snmpd.conf
+RANDOM_STRING=$(random_password 20)
+sed -i "s/RANDOMSTRINGGOESHERE/$RANDOM_STRING/g" /etc/snmp/snmpd.conf
 echo "SNMP Community String: $RANDOM_STRING" >>~/librenms.creds
 curl -qso /usr/bin/distro https://raw.githubusercontent.com/librenms/librenms-agent/master/snmp/distro
 chmod +x /usr/bin/distro

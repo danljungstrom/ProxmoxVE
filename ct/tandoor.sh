@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (Canbiz)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -43,17 +44,15 @@ function update_script() {
     systemctl stop tandoor
     msg_ok "Stopped Service"
 
-    msg_info "Creating Backup"
-    mv /opt/tandoor /opt/tandoor.bak
-    msg_ok "Backup Created"
+    create_backup /opt/tandoor/.env
 
     NODE_VERSION="22" NODE_MODULE="yarn" setup_nodejs
     PYTHON_VERSION="3.13" setup_uv
-    fetch_and_deploy_gh_release "tandoor" "TandoorRecipes/recipes" "tarball" "latest" "/opt/tandoor"
+    CLEAN_INSTALL=1 CLEAN_INSTALL_KEEP="config api mediafiles staticfiles" fetch_and_deploy_gh_release "tandoor" "TandoorRecipes/recipes" "tarball" "latest" "/opt/tandoor"
+
+    restore_backup
 
     msg_info "Updating Tandoor"
-    cp -r /opt/tandoor.bak/{config,api,mediafiles,staticfiles} /opt/tandoor/
-    mv /opt/tandoor.bak/.env /opt/tandoor/.env
     cd /opt/tandoor
     $STD uv venv --clear .venv --python=python3
     $STD uv pip install -r requirements.txt --python .venv/bin/python
@@ -69,7 +68,6 @@ EOF
     cd /opt/tandoor
     $STD /opt/tandoor/.venv/bin/python manage.py migrate
     $STD /opt/tandoor/.venv/bin/python manage.py collectstatic --no-input
-    rm -rf /opt/tandoor.bak
     msg_ok "Updated Tandoor"
 
     msg_info "Starting Service"
