@@ -9,7 +9,7 @@ trap 'rm -rf "${SB}"' EXIT
 REWRITE="$(sed '/^_cs_boot=/,$d' ../../ct/happier.sh | sed "s|/usr/bin|${SB}/bin|g")"
 
 reset() {
-  rm -rf "${SB:?}/bin" "${SB}/continued"
+  rm -rf "${SB:?}/bin" "${SB}/continued" "${SB}/effect"
   mkdir "${SB}/bin"
   printf 'INSTALLER_REPO legacy updater\n' >"${SB}/bin/update"
 }
@@ -52,6 +52,31 @@ test_successful_rewrite_replaces_entrypoint() {
   assert_fail "legacy placeholders removed" grep -q INSTALLER_REPO "${SB}/bin/update"
   assert_eq "$(find "${SB}/bin" -name '.update.*' | wc -l)" 0 "temporary updater moved away"
   assert_ok "engine migration may continue" test -e "${SB}/continued"
+}
+
+test_generated_updater_preserves_fetch_and_payload_status() {
+  reset
+  assert_ok "write transitional updater" rewrite
+  # The network boundary can fail before returning data or after a partial body.
+  cat >"${SB}/bin/curl" <<'CURL'
+#!/usr/bin/env bash
+if [[ "${WITH_BODY}" == 1 ]]; then
+  printf '%s\n' ': >"${UPDATE_EFFECT}"' 'exit 7'
+fi
+exit "${FETCH_RC}"
+CURL
+  chmod +x "${SB}/bin/curl"
+  local body rc
+  for body in 0 1; do
+    rc=0
+    PATH="${SB}/bin:${PATH}" FETCH_RC=22 WITH_BODY="${body}" UPDATE_EFFECT="${SB}/effect" bash "${SB}/bin/update" || rc=$?
+    assert_eq "${rc}" 22 "failed fetch status is preserved (body=${body})"
+    assert_fail "failed fetch never executes a partial response" test -e "${SB}/effect"
+  done
+  rc=0
+  PATH="${SB}/bin:${PATH}" FETCH_RC=0 WITH_BODY=1 UPDATE_EFFECT="${SB}/effect" bash "${SB}/bin/update" || rc=$?
+  assert_eq "${rc}" 7 "downloaded script status is preserved"
+  assert_ok "successful fetch executes its response" test -e "${SB}/effect"
 }
 
 run_tests

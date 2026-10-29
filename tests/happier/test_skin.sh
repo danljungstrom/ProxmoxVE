@@ -146,6 +146,28 @@ test_cancel_cleans_dialog_resources_and_preserves_engine_exit() {
   assert_ok "engine cancellation behavior retained" grep -q ENGINE_EXIT <<<"${out}"
 }
 
+# shellcheck disable=SC2016 # the child shell expands source snippets
+test_question_validation_failure_cleans_dialog_resources() {
+  if ! command -v infocmp >/dev/null 2>&1 || ! command -v tic >/dev/null 2>&1; then
+    skip "no infocmp/tic"
+    return 0
+  fi
+  local key rc
+  for key in HAPPIER_PVE_AUTOSTART HAPPIER_PVE_INSTALL_TYPE; do
+    rc=0
+    env "${key}=invalid" PHS_SILENT=1 TMPDIR="${SB}" TERM=xterm-256color bash -c '
+      source ./lib.sh
+      source ../../misc/happier-common.func
+      msg_error() { :; }
+      pveversion() { :; }
+      eval "$(extract_function ../../ct/happier.sh app_questions)"
+      eval "$(sed -n "/^if command -v pveversion/,/^fi$/p" ../../ct/happier.sh)"
+    ' || rc=$?
+    assert_eq "${rc}" 1 "invalid questions fail installation"
+    assert_eq "$(find "${SB}" -maxdepth 1 -name "happier-terminfo.*" | wc -l)" 0 "failed questions release temporary terminfo"
+  done
+}
+
 # The overridden names must still exist at the pinned engine ref. Network test:
 # skipped offline, always runs in CI.
 test_engine_contract_at_pinned_ref() {

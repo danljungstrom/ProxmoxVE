@@ -92,8 +92,10 @@ test_app_questions_rejects_invalid_presets() {
 
 # shellcheck disable=SC2016 # literal attack input and child-shell expansion are intentional
 test_installer_rejects_invalid_port_before_setup() {
-  local value rc
-  for value in 0 65536 '$(id)'; do
+  local value rc dir attack
+  dir="$(mktemp -d)"
+  printf -v attack '$(: > "%s/port-evaluated")' "${dir}"
+  for value in 0 65536 "${attack}"; do
     rc=0
     env HAPPIER_PVE_SERVER_PORT="${value}" bash -c '
       source ../../misc/happier-common.func
@@ -101,7 +103,9 @@ test_installer_rejects_invalid_port_before_setup() {
       eval "$(sed -n "/^validate_happier_presets || exit 1$/,/^HAPPIER_SERVER_PORT=/p" ../../install/happier-install.sh)"
     ' || rc=$?
     assert_eq "${rc}" 1 "invalid TCP port rejected before setup"
+    assert_fail "rejected port text is never evaluated" test -e "${dir}/port-evaluated"
   done
+  rm -rf "${dir}"
 }
 
 test_valid_presets_preserve_defaults_and_tcp_boundary() {

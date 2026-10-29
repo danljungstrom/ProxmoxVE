@@ -18,13 +18,14 @@ export COMMUNITY_SCRIPTS_CORE_URL
 # Containers installed before the engine move carry the fork's own /usr/bin/update,
 # whose URL is written with unexpanded ${REPO}/${REF}. The engine's update path
 # migrates legacy entrypoints by grepping that URL, which would bake the literal
-# placeholders in. Rewrite it first as the plain legacy one-liner the migration
-# understands (temp file + mv: the old helper may be the script running us).
+# placeholders in. Rewrite it first with the resolved URL the migration parses.
+# It can remain in place if engine loading fails, so preserve download failures.
+# Temp file + mv: the old helper may be the script running us.
 if ! command -v pveversion >/dev/null 2>&1 && grep -q 'INSTALLER_REPO' /usr/bin/update 2>/dev/null; then
   if ! {
     # shellcheck disable=SC2016 # the $(curl ...) is meant literally, for the entrypoint
     _happier_update_tmp="$(mktemp /usr/bin/.update.XXXXXX 2>/dev/null)" &&
-      printf '#!/usr/bin/env bash\nbash -c "$(curl -fsSL %s/ct/happier.sh)"\n' "${COMMUNITY_SCRIPTS_URL:-${_CS_DEFAULT_URL}}" >"${_happier_update_tmp}" &&
+      printf '#!/usr/bin/env bash\n_happier_script="$(curl -fsSL %s/ct/happier.sh)" || exit "$?"\nbash -c "${_happier_script}"\n' "${COMMUNITY_SCRIPTS_URL:-${_CS_DEFAULT_URL}}" >"${_happier_update_tmp}" &&
       chmod +x "${_happier_update_tmp}" && mv -f "${_happier_update_tmp}" /usr/bin/update
   }; then
     if [[ -n "${_happier_update_tmp:-}" ]]; then rm -f "${_happier_update_tmp}"; fi
@@ -291,7 +292,7 @@ function update_script() {
 
 function app_questions() {
   local BACKTITLE="Proxmox VE Helper Scripts"
-  validate_happier_presets || exit 1
+  validate_happier_presets || return 1
 
   # Honor pre-set env for EVERY knob: capture which were already provided so we
   # can skip their prompts and preserve the supplied values. Presetting all of
@@ -326,7 +327,7 @@ function app_questions() {
   local install_method=""
   install_method="$(normalize_install_method "${HAPPIER_PVE_INSTALL_METHOD:-}")" || {
     msg_error "Invalid HAPPIER_PVE_INSTALL_METHOD='${HAPPIER_PVE_INSTALL_METHOD}'. Use: installers | from_source."
-    exit 1
+    return 1
   }
 
   if [[ -z "${_preset_type}" ]]; then
@@ -342,7 +343,7 @@ function app_questions() {
     devbox | server_only) ;;
     *)
       msg_error "Invalid HAPPIER_PVE_INSTALL_TYPE='${HAPPIER_PVE_INSTALL_TYPE}'. Use: devbox | server_only."
-      exit 1
+      return 1
       ;;
   esac
 
@@ -370,12 +371,12 @@ function app_questions() {
       tailscale | proxy | none) ;;
       *)
         msg_error "Invalid HAPPIER_PVE_REMOTE_ACCESS='${HAPPIER_PVE_REMOTE_ACCESS}'. Use: tailscale | proxy | none."
-        exit 1
+        return 1
         ;;
     esac
     if [[ "${HAPPIER_PVE_REMOTE_ACCESS}" == "proxy" && -z "$(normalize_https_public_url_or_empty "${HAPPIER_PVE_PUBLIC_URL}")" ]]; then
       msg_error "HAPPIER_PVE_REMOTE_ACCESS=proxy requires HAPPIER_PVE_PUBLIC_URL to be a valid https:// URL (got: '${HAPPIER_PVE_PUBLIC_URL}')."
-      exit 1
+      return 1
     fi
   fi
 
@@ -480,7 +481,7 @@ function app_questions() {
   fi
   if [[ "${HAPPIER_PVE_AUTO_UPDATE}" == "1" ]] && ! is_valid_hhmm "${HAPPIER_PVE_AUTO_UPDATE_AT}"; then
     msg_error "Invalid HAPPIER_PVE_AUTO_UPDATE_AT='${HAPPIER_PVE_AUTO_UPDATE_AT}'. Use HH:MM (24h)."
-    exit 1
+    return 1
   fi
 
   if [[ -z "${_preset_channel}" ]]; then
@@ -501,7 +502,7 @@ function app_questions() {
   fi
   HAPPIER_PVE_CHANNEL="$(normalize_happier_channel "${HAPPIER_PVE_CHANNEL}")" || {
     msg_error "Invalid HAPPIER_PVE_CHANNEL='${HAPPIER_PVE_CHANNEL}'. Use: stable | preview | dev."
-    exit 1
+    return 1
   }
 
   HAPPIER_PVE_STACK_PACKAGE="$(channel_default_stack_package "${HAPPIER_PVE_CHANNEL}" "${HAPPIER_PVE_STACK_PACKAGE}")"
@@ -522,7 +523,7 @@ function app_questions() {
 
 if command -v pveversion >/dev/null 2>&1; then
   happier_dialogs_begin
-  app_questions
+  app_questions || { happier_dialogs_end; exit 1; }
   happier_dialogs_end
 fi
 
