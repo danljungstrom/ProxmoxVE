@@ -357,8 +357,13 @@ git commit -m "docs(happier): document devbox/auto-update install knobs"
 
 - [x] `bash -n ct/happier.sh install/happier-install.sh` → exit 0.
 - [x] `shellcheck` on both (honoring `.shellcheckrc`) → no new errors. (The `happier-lint` workflow runs this on the eventual PR.)
-- [x] **LXC integration matrix** (run 2026-07-03, see docs/audits/2026-07-03-lxc-matrix.md) from the spec (cases 1-6): real devbox install with agents on/off, PAT via env, auto-update on/off, run the Update action, and a server_only regression check. Confirm: drop-in exists at mode 600 with the expected keys; `command -v claude/codex` resolve; `<serviceName>-updater.timer` active iff auto-update on; daemon + relay both restart on update without killing a live session; server_only touches none of it. A health probe should now report `daemon_required_env` satisfied.
+- [ ] **LXC integration matrix** from the spec (cases 1-6): real devbox install with agents on/off, PAT via env, auto-update on/off, run the Update action, and a server_only regression check. Confirm: drop-in exists at mode 600 with the expected keys; `command -v claude/codex` resolve; `<serviceName>-updater.timer` active iff auto-update on; daemon + relay both restart on update without killing a live session; server_only touches none of it. A health probe should now report `daemon_required_env` satisfied.
 - [ ] Only after LXC-green: PR `feat/devbox-agents-autoupdate` → `happier-dev/main` (cross-fork from the `danljungstrom` fork), after the audit/sync PRs land.
+
+**Current verification status (2026-10-29):** [PR #8](https://github.com/happier-dev/ProxmoxVE/pull/8) is open, but the complete live matrix remains unverified for its current source. No Proxmox test host is available now, so this live-validation gate is blocked; a host is needed to run the remaining cases and revalidate the changed paths.
+
+- The [2026-07-03 run](../../audits/2026-07-03-lxc-matrix.md) verified the recorded dev-channel install, PAT, update, and server-only cases. Auto-update degraded without a timer because the released CLI rejected its flags. The record does not establish the full timer contract or preservation of a live agent session across an update.
+- The later [2026-10-22 run](../../audits/2026-10-22-lxc-matrix.md) records a scheduled `happier-pve-update.timer`, successful managed install/update cases, and a completed from-source install. It explicitly leaves actual timer firing, Tailscale Serve, arm64, and interactive dialogs untested. It predates the current PR follow-up fixes and does not close their live-validation gap.
 
 ## Spec coverage map
 - Spec A (agent provisioning) → Tasks 3, 4, 5. Spec B (PAT) → Tasks 1, 4, 5. Spec C (auto-update) → Tasks 1, 2, 5. Spec D (daemon restart on update) → Task 6. Spec E (env knobs + docs) → Tasks 1, 7. Out-of-scope items (OOM, gemini/opencode) intentionally untasked.
