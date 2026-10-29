@@ -89,16 +89,30 @@ function update_script() {
     msg_info "Updating ${APP} CLI (channel: ${installer_channel})"
     local cli_update_rc=0
     install_happier_cli "${installer_channel}" || cli_update_rc=$?
+    if [[ "${cli_update_rc}" -ne 0 ]]; then
+      # An older stable CLI may still live under /opt/happier/cli. The relay
+      # reinstall clears that directory, so do not touch the installed stack
+      # unless the bootstrap has successfully moved/refreshed the CLI first.
+      msg_error "CLI update failed (rc=${cli_update_rc}); relay and daemon services were not changed. Retry the update after fixing the CLI installer failure."
+      exit 1
+    fi
     local cli_bin=""
     cli_bin="$(resolve_installed_cli_for_channel "${installer_channel}" || true)"
     if [[ -z "${cli_bin}" ]]; then
       msg_error "No channel-matched Happier CLI was found after the update. Try reinstalling the Proxmox container."
       exit 1
     fi
-    if [[ "${cli_update_rc}" -eq 0 ]]; then
-      msg_ok "Updated ${APP} CLI"
-    else
-      msg_warn "CLI update failed (rc=${cli_update_rc}); continuing with the existing CLI"
+    msg_ok "Updated ${APP} CLI"
+    local update_rc=0
+
+    # Resolve the installed service through the CLI before mutating the relay.
+    # Unit globs can select another channel, server profile or Happier home.
+    resolve_happier_daemon_service "${cli_bin}" "${installer_channel}" || exit 1
+    local daemon_was_installed="${HAPPIER_DAEMON_INSTALLED}"
+    local daemon_was_enabled=1 daemon_was_active=1
+    if [[ "${daemon_was_installed}" -eq 1 ]]; then
+      systemctl is-enabled --quiet "${HAPPIER_DAEMON_UNIT}" 2>/dev/null || daemon_was_enabled=0
+      systemctl is-active --quiet "${HAPPIER_DAEMON_UNIT}" 2>/dev/null || daemon_was_active=0
     fi
 
     local relay_service=""
@@ -138,6 +152,7 @@ function update_script() {
     "${cli_bin}" "${relay_install_args[@]}" || relay_install_rc=$?
     if [[ "${relay_install_rc}" -ne 0 ]]; then
       msg_warn "Relay host reinstall failed (rc=${relay_install_rc}); continuing with the existing relay unit"
+      update_rc=1
     else
       msg_ok "Updated ${APP} relay host"
     fi
@@ -145,13 +160,19 @@ function update_script() {
     # can both (re-)enable and start the unit, so restore enabled-vs-disabled and
     # active-vs-inactive separately — otherwise an enabled-but-manually-stopped
     # relay would be silently turned back on by the update.
-    if [[ "${relay_was_enabled}" -eq 0 ]]; then
-      systemctl disable -q "${relay_service}" >/dev/null 2>&1 || true
+    local relay_enable_action=disable
+    if [[ "${relay_was_enabled}" -eq 1 ]]; then relay_enable_action=enable; fi
+    if ! systemctl "${relay_enable_action}" -q "${relay_service}" >/dev/null 2>&1; then
+      msg_warn "Could not restore ${relay_enable_action} state for ${relay_service}."
+      update_rc=1
     fi
     if [[ "${relay_was_active}" -eq 1 ]]; then
-      restart_happier_unit "${relay_service}"
+      restart_happier_unit "${relay_service}" || update_rc=1
     else
-      systemctl stop "${relay_service}" >/dev/null 2>&1 || true
+      if ! systemctl stop "${relay_service}" >/dev/null 2>&1; then
+        msg_warn "Could not restore stopped state for ${relay_service}."
+        update_rc=1
+      fi
     fi
     # Devbox (no-op for server_only): re-run `service install` so the daemon unit's
     # ExecStart follows the updated CLI payload — it pins the version that
@@ -159,18 +180,38 @@ function update_script() {
     # choice, then restart it via systemd if it was running. Not via
     # `daemon restart`: this runs as root, and the CLI refuses to act on a service
     # owned by another Happier home (/home/happier/.happier).
-    local _daemon_unit
-    _daemon_unit="$(find_happier_daemon_unit)"
-    if [[ -n "${_daemon_unit}" ]]; then
-      local daemon_was_enabled=1 daemon_was_active=1
-      systemctl is-enabled --quiet "${_daemon_unit}" 2>/dev/null || daemon_was_enabled=0
-      systemctl is-active --quiet "${_daemon_unit}" 2>/dev/null || daemon_was_active=0
-      happier_install_daemon_service "${cli_bin}" "${daemon_was_enabled}" || true
-      if [[ "${daemon_was_active}" -eq 1 ]]; then
-        restart_happier_unit "${_daemon_unit}"
-      else
-        systemctl stop "${_daemon_unit}" >/dev/null 2>&1 || true
+    if [[ "${daemon_was_installed}" -eq 1 ]]; then
+      local daemon_install_rc=0
+      happier_install_daemon_service "${cli_bin}" "${daemon_was_enabled}" "${installer_channel}" || daemon_install_rc=$?
+      if [[ "${daemon_install_rc}" -ne 0 ]]; then
+        msg_warn "Daemon service refresh did not complete (rc=${daemon_install_rc}); restoring its previous running state."
+        update_rc=1
       fi
+      # Read the installed identity again before restoring its state, instead of
+      # assuming that a successful CLI invocation proves the service exists.
+      if ! resolve_happier_daemon_service "${cli_bin}" "${installer_channel}"; then
+        update_rc=1
+      elif [[ "${HAPPIER_DAEMON_INSTALLED}" -ne 1 ]]; then
+        msg_warn "The installed Happier daemon service was not found after refresh."
+        update_rc=1
+      else
+        local daemon_enable_action=disable
+        if [[ "${daemon_was_enabled}" -eq 1 ]]; then daemon_enable_action=enable; fi
+        if ! systemctl "${daemon_enable_action}" -q "${HAPPIER_DAEMON_UNIT}" >/dev/null 2>&1; then
+          msg_warn "Could not restore ${daemon_enable_action} state for ${HAPPIER_DAEMON_UNIT}."
+          update_rc=1
+        fi
+        if [[ "${daemon_was_active}" -eq 1 ]]; then
+          restart_happier_unit "${HAPPIER_DAEMON_UNIT}" || update_rc=1
+        elif ! systemctl stop "${HAPPIER_DAEMON_UNIT}" >/dev/null 2>&1; then
+          msg_warn "Could not restore stopped state for ${HAPPIER_DAEMON_UNIT}."
+          update_rc=1
+        fi
+      fi
+    fi
+    if [[ "${update_rc}" -ne 0 ]]; then
+      msg_error "${APP} update did not complete successfully. Review the warnings above and retry the update."
+      exit "${update_rc}"
     fi
     msg_ok "Updated ${APP}"
     exit 0

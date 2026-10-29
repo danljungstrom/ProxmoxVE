@@ -143,24 +143,92 @@ channel_hosted_webapp_url() {
   esac
 }
 
-# Restart a Happier systemd unit, best-effort (failures are non-fatal).
+# Callers decide whether failure is fatal, but no restart failure is silent.
 restart_happier_unit() {
-  systemctl restart "$1" >/dev/null 2>&1 || true
+  local rc=0
+  systemctl restart "$1" || rc=$?
+  if [[ "${rc}" -ne 0 ]]; then
+    msg_warn "Could not restart $1 (rc=${rc}); check systemctl status $1"
+  fi
+  return "${rc}"
 }
 
-# Discover the installed happier daemon systemd unit (channel-suffixed name).
-# Tries list-unit-files first (finds installed-but-never-loaded units, e.g. right
-# after `service install` with autostart off), then loaded units. --plain keeps
-# the "●" failure marker out of field 1. Prints the unit name, or nothing.
-find_happier_daemon_unit() {
-  local unit=""
-  # `|| true`: systemd 257 exits 1 when nothing matches, which under the engine's
-  # errexit + ERR trap would abort the caller (e.g. update on a server_only CT).
-  unit="$(systemctl list-unit-files --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}' || true)"
-  if [[ -z "${unit}" ]]; then
-    unit="$(systemctl list-units --all --plain --no-legend 'happier-daemon*.service' 2>/dev/null | awk 'NR==1{print $1}' || true)"
+# All daemon CLI operations use the same user, home and server context. Read-only
+# inventory omits --server so server_only containers need no Proxmox profile.
+happier_daemon_cli() {
+  local cli_bin="$1"
+  shift
+  HOME="${HAPPIER_HOME:-/home/happier}" \
+    HAPPIER_HOME_DIR="${HAPPIER_HOME:-/home/happier}/.happier" \
+    "${cli_bin}" "$@"
+}
+
+# The CLI owns service identities (cli-v0.2.16+ JSON contract).
+# Retain an existing default-following or Proxmox-pinned service; never choose a
+# unit by glob order or convert a pinned service to a second automatic service.
+# Sets HAPPIER_DAEMON_UNIT, _INSTALLED and _SERVICE_ARGS in the calling shell.
+# shellcheck disable=SC2034 # installed status is consumed by ct/install callers
+resolve_happier_daemon_service() {
+  local cli_bin="$1" channel="$2" inventory candidates profile_json profile_exists profile_id selected
+  HAPPIER_DAEMON_UNIT=""
+  HAPPIER_DAEMON_INSTALLED=0
+  HAPPIER_DAEMON_SERVICE_ARGS=()
+  inventory="$(happier_daemon_cli "${cli_bin}" service list --mode system --system-user happier --json)" || {
+    msg_error "Could not read Happier daemon service inventory"
+    return 1
+  }
+  candidates="$(jq -ce --arg home "${HAPPIER_HOME:-/home/happier}/.happier" --arg channel "${channel/dev/publicdev}" '
+    if (.entries | type) != "array" then error("invalid service inventory") else
+      [.entries[] | select(.installed == true and .platform == "linux" and .mode == "system"
+        and .happierHomeDir == $home and .releaseChannel == $channel)]
+    end' <<<"${inventory}")" || {
+    msg_error "Invalid Happier daemon service inventory"
+    return 1
+  }
+  [[ "${candidates}" == '[]' ]] && return 0
+  # An operator may run an unrelated daemon in a server_only container. Prove
+  # profile absence from the CLI inventory, rather than treating a failed lookup
+  # as absence or interpreting its diagnostic text.
+  profile_json="$(happier_daemon_cli "${cli_bin}" server list --json)" || {
+    msg_error "Could not read Happier server profiles"
+    return 1
+  }
+  profile_exists="$(jq -er '
+    select(.v == 1 and .ok == true and .kind == "server_list") | .data.profiles
+    | if type != "array" then error("invalid server profiles")
+      else any(.id == "proxmox" or .name == "proxmox") | tostring end' <<<"${profile_json}")" || {
+    msg_error "Invalid Happier server profile inventory"
+    return 1
+  }
+  [[ "${profile_exists}" == false ]] && return 0
+  profile_json="$(happier_daemon_cli "${cli_bin}" --server proxmox server current --json)" || {
+    msg_error "Could not read the Proxmox server profile"
+    return 1
+  }
+  profile_id="$(jq -er '
+    select(.v == 1 and .ok == true and .kind == "server_current") | .data.active.id
+    | select(type == "string" and length > 0)' <<<"${profile_json}")" || {
+    msg_error "Could not resolve the Proxmox server profile"
+    return 1
+  }
+  selected="$(jq -c --arg id "${profile_id}" '
+    [.[] | select(.targetMode == "default-following" or
+      (.targetMode == "pinned" and (.activeServerId // .serverId) == $id))]
+    | if length > 1 then error("multiple services serve Proxmox; select one before updating")
+      elif length == 1 then .[0] else null end' <<<"${candidates}")" || {
+    msg_error "Could not select one Happier daemon service; inspect service list --mode system"
+    return 1
+  }
+  [[ "${selected}" == null ]] && return 0
+  HAPPIER_DAEMON_UNIT="$(jq -er '.path | select(type == "string" and length > 0)' <<<"${selected}")" || return 1
+  HAPPIER_DAEMON_UNIT="${HAPPIER_DAEMON_UNIT##*/}"
+  if [[ "$(jq -r '.targetMode' <<<"${selected}")" == pinned ]]; then
+    local instance
+    instance="$(jq -er '.serverId | select(type == "string" and length > 0)' <<<"${selected}")" || return 1
+    HAPPIER_DAEMON_SERVICE_ARGS=(--instance "${instance}" --ring "${channel}")
   fi
-  printf '%s' "${unit}"
+  HAPPIER_DAEMON_INSTALLED=1
+  return 0
 }
 
 # Resolve the npm package spec for a channel: honors an explicit spec ($2) and
@@ -254,14 +322,15 @@ resolve_installed_cli_for_channel() {
 # unit waits for auth), so callers check for the unit instead. Re-run on every
 # update: the unit's ExecStart pins the CLI payload version that installed it.
 happier_install_daemon_service() {
-  local cli_bin="$1" autostart="$2"
-  local svc_args=(--server proxmox service install --mode system --system-user happier --yes)
+  local cli_bin="$1" autostart="$2" channel="${3:-${HAPPIER_CHANNEL:-stable}}"
+  resolve_happier_daemon_service "${cli_bin}" "${channel}" || return 1
+  local svc_args=(--server proxmox service install --mode system --system-user happier --yes "${HAPPIER_DAEMON_SERVICE_ARGS[@]}")
   [[ "${autostart}" == "1" ]] || svc_args+=(--no-autostart)
   local rc=0
-  HOME="/home/happier" \
-    HAPPIER_HOME_DIR="/home/happier/.happier" \
-    $STD "${cli_bin}" "${svc_args[@]}" </dev/null || rc=$?
-  chown -R happier:happier /home/happier/.happier 2>/dev/null || true
+  # Do not hide service-install diagnostics in the engine's silent wrapper:
+  # a pre-auth activation timeout is expected, other failures need investigation.
+  happier_daemon_cli "${cli_bin}" "${svc_args[@]}" </dev/null || rc=$?
+  chown -R happier:happier "${HAPPIER_HOME:-/home/happier}/.happier" 2>/dev/null || true
   return "${rc}"
 }
 
@@ -468,7 +537,7 @@ happier_dialogs_end() {
 
 # Install the skin over the already-loaded engine. Call once, right after this
 # file is sourced (host and container). No-op without the engine (tests).
-# shellcheck disable=SC2034,SC2317 # engine globals; overrides the engine calls
+# shellcheck disable=SC2034,SC2317,SC2329 # engine globals and callbacks invoked by the sourced engine
 happier_apply_skin() {
   [[ "${HAPPIER_PVE_SKIN:-1}" == "0" ]] && return 0
   declare -f color >/dev/null 2>&1 || return 0

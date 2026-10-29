@@ -51,21 +51,4 @@ test_stable_beats_all() {
   assert_eq "$(detect_installed_channel)" "stable" "stable outranks preview and dev"
 }
 
-# Review #1: systemd 257 exits 1 from `list-unit-files` when nothing matches. Under
-# the engine's `set -Eeo pipefail` + ERR trap that must not abort the caller.
-test_find_daemon_unit_survives_no_match_under_errexit() {
-  local out rc=0
-  out="$(bash -c '
-    set -Eeo pipefail
-    trap "echo TRAPPED; exit 99" ERR
-    msg_warn() { :; }
-    source ../../misc/happier-common.func
-    systemctl() { return 1; }
-    u="$(find_happier_daemon_unit)"
-    echo "unit=[${u}]"
-  ' 2>&1)" || rc=$?
-  assert_eq "${rc}" "0" "no abort"
-  assert_eq "${out}" "unit=[]" "empty unit, no ERR trap"
-}
-
 run_tests

@@ -628,6 +628,8 @@ msg_info "Creating user"
 if ! id happier &>/dev/null; then
   $STD useradd -m -s /bin/bash happier
 fi
+HAPPIER_HOME="$(getent passwd happier | cut -d: -f6 | tr -d '\r' || true)"
+[[ -z "${HAPPIER_HOME}" ]] && HAPPIER_HOME="/home/happier"
 msg_ok "User ready"
 
 SETUP_BIND="loopback"
@@ -691,10 +693,6 @@ install_managed_relay_runtime() {
 
   msg_info "Installing Happier relay host"
   $STD "${HAPPIER_CLI_BIN}" "${relay_args[@]}" </dev/null
-  # Kept for ensure_relay_host_installed: the CLI's daemon `service install` has
-  # been observed to remove the relay unit during its reconciliation on fresh
-  # installs, and reinstalling needs the exact same argument set.
-  RELAY_INSTALL_ARGS=("${relay_args[@]}")
   msg_ok "Installed Happier relay host"
 
   if [[ "${REMOTE_ACCESS}" == "tailscale" ]]; then
@@ -777,36 +775,17 @@ install_devbox_background_service() {
   # at boot): the env drop-in needs something to attach to, and starting the
   # daemon later is then a plain `systemctl start`.
   local svc_rc=0
-  happier_install_daemon_service "${HAPPIER_CLI_BIN}" "${AUTOSTART}" || svc_rc=$?
-  if [[ "${svc_rc}" -ne 0 ]]; then
-    if [[ -n "$(find_happier_daemon_unit)" ]]; then
-      msg_warn "Background service installed; daemon stays inactive until authenticated (CLI activation check rc=${svc_rc})."
-    else
-      msg_error "Background service install failed (rc=${svc_rc}) and no happier-daemon unit was created."
-      exit 1
-    fi
-  fi
-  msg_ok "Background service installed"
-}
-
-# The CLI's daemon `service install` has been observed to remove/absorb the
-# relay unit during reconciliation on fresh installs (vendor behavior varies by
-# version). Reinstall the relay with the exact original arguments if its unit
-# vanished; idempotent when everything is fine.
-ensure_relay_host_installed() {
-  local relay_unit=""
-  relay_unit="$(channel_relay_service_name "${HAPPIER_CHANNEL}")"
-  if systemctl list-unit-files --no-legend "${relay_unit}.service" 2>/dev/null | grep -q .; then
-    return 0
-  fi
-  msg_warn "Relay unit ${relay_unit} missing after daemon service install; reinstalling the relay host."
-  local reinstall_rc=0
-  $STD "${HAPPIER_CLI_BIN}" "${RELAY_INSTALL_ARGS[@]}" </dev/null || reinstall_rc=$?
-  if ! systemctl list-unit-files --no-legend "${relay_unit}.service" 2>/dev/null | grep -q .; then
-    msg_error "Relay unit ${relay_unit} still missing after reinstall (rc=${reinstall_rc}); the Happier relay is not installed."
+  happier_install_daemon_service "${HAPPIER_CLI_BIN}" "${AUTOSTART}" "${HAPPIER_CHANNEL}" || svc_rc=$?
+  resolve_happier_daemon_service "${HAPPIER_CLI_BIN}" "${HAPPIER_CHANNEL}" || exit 1
+  if [[ "${HAPPIER_DAEMON_INSTALLED}" != 1 ]]; then
+    msg_error "Background service install did not create the Proxmox daemon service (rc=${svc_rc})."
     exit 1
   fi
-  restart_happier_unit "${relay_unit}"
+  if [[ "${svc_rc}" -ne 0 ]]; then
+    msg_warn "Daemon service definition exists, but install/activation was not confirmed (rc=${svc_rc}). Before auth this can be expected; check systemctl status ${HAPPIER_DAEMON_UNIT}."
+  else
+    msg_ok "Background service installed"
+  fi
 }
 
 # Install the agent CLIs the daemon drives.
@@ -873,19 +852,19 @@ install_devbox_agents() {
   fi
 }
 
-# Write a chmod-600 systemd drop-in giving the daemon the agent paths (+ optional PAT).
-#   $1 = the systemd unit running the daemon ("" when there is none: autostart off)
+# Persist the daemon's agent paths (+ optional PAT) through its environment owner:
+# source stacks use STACK_ENV_FILE for both manual and service starts; managed
+# daemons use a private systemd drop-in and EnvironmentFile.
+#   $1 = the managed daemon's systemd unit
 #   $2 = the command that starts the daemon manually, shown when there is no unit
-# The unit differs per method: installers' `service install` creates happier-daemon*,
-# while from_source runs the daemon inside the hstack stack unit.
 write_daemon_env_dropin() {
   local daemon_unit="$1" manual_start_cmd="$2"
   local claude_path codex_path dropin_dir dropin envfile
   claude_path="$(command -v claude || true)"
   # The native installer puts claude in the happier user's ~/.local/bin, which
   # root's PATH does not include.
-  if [[ -z "${claude_path}" && -x /home/happier/.local/bin/claude ]]; then
-    claude_path="/home/happier/.local/bin/claude"
+  if [[ -z "${claude_path}" && -x "${HAPPIER_HOME}/.local/bin/claude" ]]; then
+    claude_path="${HAPPIER_HOME}/.local/bin/claude"
   fi
   codex_path="$(command -v codex || true)"
 
@@ -898,6 +877,18 @@ write_daemon_env_dropin() {
 
   if [[ -z "${claude_path}" && -z "${codex_path}" && -z "${DAEMON_GITHUB_PAT}" ]]; then
     msg_warn "No claude/codex found and no PAT provided; skipping daemon env drop-in"
+    return 0
+  fi
+
+  if [[ "${INSTALL_METHOD}" == "from_source" ]]; then
+    msg_info "Wiring source stack daemon environment"
+    if [[ -n "${claude_path}" ]]; then set_env_kv "${STACK_ENV_FILE}" HAPPIER_CLAUDE_PATH "${claude_path}"; fi
+    if [[ -n "${codex_path}" ]]; then set_env_kv "${STACK_ENV_FILE}" HAPPIER_CODEX_PATH "${codex_path}"; fi
+    if [[ -n "${DAEMON_GITHUB_PAT}" ]]; then
+      set_env_kv "${STACK_ENV_FILE}" GH_TOKEN "${DAEMON_GITHUB_PAT}"
+      set_env_kv "${STACK_ENV_FILE}" GITHUB_PERSONAL_ACCESS_TOKEN "${DAEMON_GITHUB_PAT}"
+    fi
+    msg_ok "Wired source stack daemon environment"
     return 0
   fi
 
@@ -1079,17 +1070,16 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
     configure_devbox_server_profile
 
     install_devbox_background_service
-    ensure_relay_host_installed
     if [[ "${AUTOSTART}" != "1" ]]; then
       # The service install / relay reconcile may have (re)started units; honor
       # the autostart-off choice: installed, not enabled, not running.
-      DAEMON_UNIT="$(find_happier_daemon_unit)"
+      DAEMON_UNIT="${HAPPIER_DAEMON_UNIT}"
       systemctl disable -q --now "$(channel_relay_service_name "${HAPPIER_CHANNEL}")" >/dev/null 2>&1 || true
       [[ -n "${DAEMON_UNIT}" ]] && { systemctl disable -q --now "${DAEMON_UNIT}" >/dev/null 2>&1 || true; }
     fi
 
     install_devbox_agents
-    write_daemon_env_dropin "$(find_happier_daemon_unit)" "sudo -u happier -H ${HAPPIER_CLI_NAME} daemon start"
+    write_daemon_env_dropin "${HAPPIER_DAEMON_UNIT}" "sudo -u happier -H ${HAPPIER_CLI_NAME} daemon start"
   fi
 
   install_auto_update_timer
@@ -1129,7 +1119,7 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   if [[ "${INSTALL_TYPE}" == "devbox" && "${AUTOSTART}" != "1" ]]; then
     # With autostart on, the managed service starts the daemon automatically once
     # authenticated (HAPPIER_DAEMON_WAIT_FOR_AUTH); only show a manual start otherwise.
-    DAEMON_UNIT="$(find_happier_daemon_unit)"
+    DAEMON_UNIT="${HAPPIER_DAEMON_UNIT}"
     if [[ -n "${DAEMON_UNIT}" ]]; then
       DAEMON_START_CMD="systemctl start ${DAEMON_UNIT}"
     else
@@ -1225,8 +1215,6 @@ if [[ ! -f "${STACK_ENV_FILE}" ]]; then
   _fallback_env="$(find /home/happier/.happier/stacks -mindepth 2 -maxdepth 2 -type f -name env 2>/dev/null | head -n 1 || true)"
   [[ -n "${_fallback_env}" ]] && STACK_ENV_FILE="${_fallback_env}"
 fi
-HAPPIER_HOME="$(getent passwd happier | cut -d: -f6 | tr -d '\r' || true)"
-[[ -z "${HAPPIER_HOME}" ]] && HAPPIER_HOME="/home/happier"
 mkdir -p "$(dirname "${STACK_ENV_FILE}")"
 touch "${STACK_ENV_FILE}"
 chown happier:happier "${STACK_ENV_FILE}"
@@ -1300,6 +1288,13 @@ if [[ "${SERVE_UI}" == "1" ]]; then
   msg_ok "Built Happier web UI"
 fi
 
+# Both start modes load STACK_ENV_FILE. Persist provider paths and the optional
+# PAT before either starts, so sudo's environment reset cannot drop the wiring.
+if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
+  install_devbox_agents
+  write_daemon_env_dropin "" "sudo -u happier -H ${HSTACK_BIN} start --restart"
+fi
+
 if [[ "${AUTOSTART}" != "1" ]]; then
   msg_info "Starting Happier"
   mkdir -p /home/happier/.happier/logs
@@ -1346,19 +1341,6 @@ if [[ "${AUTOSTART}" == "1" ]]; then
     restart_happier_unit "${STACK_LABEL}.service"
   fi
   msg_ok "Autostart enabled"
-fi
-
-# from_source devbox builds a daemon too: provision the agent CLIs and wire the daemon
-# env drop-in, mirroring the installers path. Placed after the stack service is installed
-# and STACK_ENV_FILE is written so the daemon unit exists for drop-in discovery (the helper
-# skips-with-warn if none is found). Auto-update is installers-only (warned about above).
-if [[ "${INSTALL_TYPE}" == "devbox" ]]; then
-  install_devbox_agents
-  FROM_SOURCE_DAEMON_UNIT=""
-  if [[ "${AUTOSTART}" == "1" && -f "${SYSTEMD_UNIT_DIR}/${STACK_LABEL}.service" ]]; then
-    FROM_SOURCE_DAEMON_UNIT="${STACK_LABEL}.service"
-  fi
-  write_daemon_env_dropin "${FROM_SOURCE_DAEMON_UNIT}" "sudo -u happier -H ${HSTACK_BIN} start --restart"
 fi
 
 if [[ "${REMOTE_ACCESS}" == "tailscale" && "${TAILSCALE_ENABLE_SERVE}" == "1" ]]; then
