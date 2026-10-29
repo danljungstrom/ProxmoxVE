@@ -21,10 +21,16 @@ export COMMUNITY_SCRIPTS_CORE_URL
 # placeholders in. Rewrite it first as the plain legacy one-liner the migration
 # understands (temp file + mv: the old helper may be the script running us).
 if ! command -v pveversion >/dev/null 2>&1 && grep -q 'INSTALLER_REPO' /usr/bin/update 2>/dev/null; then
-  # shellcheck disable=SC2016 # the $(curl ...) is meant literally, for the entrypoint
-  _happier_update_tmp="$(mktemp /usr/bin/.update.XXXXXX 2>/dev/null)" &&
-    printf '#!/usr/bin/env bash\nbash -c "$(curl -fsSL %s/ct/happier.sh)"\n' "${COMMUNITY_SCRIPTS_URL:-${_CS_DEFAULT_URL}}" >"${_happier_update_tmp}" &&
-    chmod +x "${_happier_update_tmp}" && mv -f "${_happier_update_tmp}" /usr/bin/update
+  if ! {
+    # shellcheck disable=SC2016 # the $(curl ...) is meant literally, for the entrypoint
+    _happier_update_tmp="$(mktemp /usr/bin/.update.XXXXXX 2>/dev/null)" &&
+      printf '#!/usr/bin/env bash\nbash -c "$(curl -fsSL %s/ct/happier.sh)"\n' "${COMMUNITY_SCRIPTS_URL:-${_CS_DEFAULT_URL}}" >"${_happier_update_tmp}" &&
+      chmod +x "${_happier_update_tmp}" && mv -f "${_happier_update_tmp}" /usr/bin/update
+  }; then
+    if [[ -n "${_happier_update_tmp:-}" ]]; then rm -f "${_happier_update_tmp}"; fi
+    echo "Happier could not replace legacy /usr/bin/update; stopping before updater migration." >&2
+    exit 1
+  fi
   unset _happier_update_tmp
 fi
 _cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
@@ -285,6 +291,7 @@ function update_script() {
 
 function app_questions() {
   local BACKTITLE="Proxmox VE Helper Scripts"
+  validate_happier_presets || exit 1
 
   # Honor pre-set env for EVERY knob: capture which were already provided so we
   # can skip their prompts and preserve the supplied values. Presetting all of

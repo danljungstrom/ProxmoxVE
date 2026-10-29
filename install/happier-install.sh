@@ -66,6 +66,8 @@ msg_ok "apt ready"
 
 update_os
 
+validate_happier_presets || exit 1
+
 INSTALL_TYPE="${HAPPIER_PVE_INSTALL_TYPE:-devbox}"             # devbox | server_only
 SERVE_UI="${HAPPIER_PVE_SERVE_UI:-1}"                          # 1 | 0
 AUTOSTART="${HAPPIER_PVE_AUTOSTART:-1}"                        # 1 | 0
@@ -350,12 +352,20 @@ install_tailscale_pkg() {
     msg_error "Failed to download the Tailscale apt source list for ${os_id}/${os_codename}."
     return 1
   fi
-  install -m 0644 "${keyring_tmp}" /usr/share/keyrings/tailscale-archive-keyring.gpg
-  install -m 0644 "${list_tmp}" /etc/apt/sources.list.d/tailscale.list
+  if ! install -m 0644 "${keyring_tmp}" /usr/share/keyrings/tailscale-archive-keyring.gpg ||
+    ! install -m 0644 "${list_tmp}" /etc/apt/sources.list.d/tailscale.list; then
+    rm -f "${keyring_tmp}" "${list_tmp}"
+    msg_error "Failed to install the Tailscale apt repository files."
+    return 1
+  fi
   rm -f "${keyring_tmp}" "${list_tmp}"
 
-  $STD apt-get update -qq
-  $STD apt-get install -y tailscale
+  # Callers check this function in `if !`, so errexit cannot propagate failures.
+  $STD apt-get update -qq || msg_warn "apt-get update reported errors; continuing with the existing package index."
+  if ! $STD apt-get install -y tailscale; then
+    msg_error "Failed to install the Tailscale package."
+    return 1
+  fi
   systemctl enable -q --now tailscaled
 }
 
@@ -969,6 +979,8 @@ After=network-online.target
 Type=oneshot
 Environment=PHS_SILENT=1
 Environment=TERM=dumb
+# The engine writes configured proxy variables here; timers have no login shell.
+EnvironmentFile=-/etc/environment
 ExecStart=/usr/bin/update
 TimeoutStartSec=1h
 UNIT
@@ -1007,7 +1019,8 @@ resolve_daemon_auth_server_url() {
 
 # Best-effort wait until a local TCP port accepts connections (server warmup).
 # Non-fatal: returns 1 if it never comes up within the budget.
-_local_port_open_probe() { timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
+# shellcheck disable=SC2016 # the child shell expands its positional port argument
+_local_port_open_probe() { timeout 1 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$1" 2>/dev/null; }
 wait_for_local_port() { retry_until "${2:-15}" 1 _local_port_open_probe "$1"; }
 
 # Interactively authenticate the daemon during install (devbox + UI + opt-in).

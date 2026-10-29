@@ -113,6 +113,7 @@ test_whiptail_update_menu_reworded() {
 test_newt_colors_preset_wins() {
   assert_eq "$(TERM=xterm-256color in_engine 'happier_apply_skin; printf "%s" "$NEWT_COLORS"' | cut -c1-25)" "root=color255,color233;ro" "256-color palette"
   assert_eq "$(TERM=linux COLORTERM='' in_engine 'tput() { echo 8; }; happier_apply_skin; printf "%s" "$NEWT_COLORS"' | cut -c1-16)" "root=white,black" "16-color fallback"
+  assert_eq "$(TERM=linux COLORTERM=color in_engine 'tput() { echo 8; }; happier_apply_skin; printf "%s" "$NEWT_COLORS"' | cut -c1-16)" "root=white,black" "generic COLORTERM does not promise 256 colors"
   assert_eq "$(NEWT_COLORS="root=red,red" in_engine 'happier_apply_skin; printf "%s" "$NEWT_COLORS"')" "root=red,red" "user palette kept"
 }
 
@@ -131,6 +132,20 @@ test_dialog_run_drops_the_alternate_screen() {
   assert_eq "$(cat "${WT_LOG}.terminfo")" "" "outside a dialog run: stock terminfo"
 }
 
+test_cancel_cleans_dialog_resources_and_preserves_engine_exit() {
+  if ! command -v infocmp >/dev/null 2>&1 || ! command -v tic >/dev/null 2>&1; then
+    skip "no infocmp/tic"
+    return 0
+  fi
+  local out rc=0 dir
+  out="$(TERM=xterm-256color in_engine 'exit_script() { echo ENGINE_EXIT; exit "$1"; }; happier_apply_skin; happier_apply_skin; happier_dialogs_begin; printf "%s" "$HAPPIER_DIALOG_TERMINFO" >"${WT_LOG}.cancel-dir"; whiptail --msgbox hi 8 30; exit_script 7' 2>&1)" || rc=$?
+  dir="$(cat "${WT_LOG}.cancel-dir")"
+  assert_ok "dialog run created a terminfo copy" test -n "${dir}"
+  assert_fail "cancel removes temporary terminfo" test -e "${dir}"
+  assert_eq "${rc}" 7 "engine exit status preserved"
+  assert_ok "engine cancellation behavior retained" grep -q ENGINE_EXIT <<<"${out}"
+}
+
 # The overridden names must still exist at the pinned engine ref. Network test:
 # skipped offline, always runs in CI.
 test_engine_contract_at_pinned_ref() {
@@ -140,11 +155,15 @@ test_engine_contract_at_pinned_ref() {
   mkdir -p "${dir}"
   if ! curl -fsSL --max-time 30 "${base}/core/core.func" -o "${dir}/core.func" ||
     ! curl -fsSL --max-time 30 "${base}/ui/menu.func" -o "${dir}/menu.func"; then
+    if [[ -n "${CI:-}" ]]; then
+      fail "Pinned engine files could not be downloaded in CI"
+      return 1
+    fi
     skip "engine not reachable"
     return 0
   fi
   local fn
-  for fn in color icons color_spinner get_header header_info load_functions; do
+  for fn in color icons color_spinner get_header header_info load_functions exit_script; do
     assert_ok "core.func defines ${fn}()" grep -q "^${fn}() {" "${dir}/core.func"
   done
   assert_ok "header_info draws get_header" grep -q 'header_content=$(get_header' "${dir}/core.func"

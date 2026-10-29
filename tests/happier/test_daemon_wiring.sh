@@ -132,6 +132,7 @@ test_auto_update_timer_units() {
   local t="${SYSTEMD_UNIT_DIR}/${AUTO_UPDATE_UNIT}.timer" s="${SYSTEMD_UNIT_DIR}/${AUTO_UPDATE_UNIT}.service"
   assert_ok "timer at the chosen time" grep -q '^OnCalendar=\*-\*-\* 03:30:00$' "${t}"
   assert_ok "service runs update unattended" grep -q '^ExecStart=/usr/bin/update$' "${s}"
+  assert_ok "system proxy environment is inherited" grep -q '^EnvironmentFile=-/etc/environment$' "${s}"
   assert_ok "PHS_SILENT selects the silent update path" grep -q '^Environment=PHS_SILENT=1$' "${s}"
   assert_ok "timer enabled" grep -q "^systemctl enable --now ${AUTO_UPDATE_UNIT}.timer$" "${SB}/systemctl.log"
 }

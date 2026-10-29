@@ -122,7 +122,7 @@ jobs:
           d = json.load(open('json/happier.json'))
           assert d['name'] == 'Happier' and d['slug'] == 'happier', 'name/slug'
           assert d['type'] == 'ct', 'type'
-          assert isinstance(d['interface_port'], int), 'interface_port'
+          assert type(d['interface_port']) is int, 'interface_port'
           m = d['install_methods']
           assert m and m[0]['script'] == 'ct/happier.sh', 'install_methods script'
           r = m[0]['resources']

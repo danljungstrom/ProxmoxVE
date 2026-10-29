@@ -29,8 +29,10 @@ assert_eq() { # actual expected label
 assert_ok() { # label cmd...
   local label="$1"
   shift
-  if ! "$@"; then
-    fail "${label}: expected success, got rc=$?"
+  local command_rc=0
+  "$@" || command_rc=$?
+  if [[ "${command_rc}" -ne 0 ]]; then
+    fail "${label}: expected success, got rc=${command_rc}"
     return 1
   fi
   return 0
@@ -54,13 +56,18 @@ extract_function() { # file funcname
   sed -n "/^\(function \)\?$2() {/,/^}/p" "$1"
 }
 
+# Tests assert intermediate outcomes explicitly; a nonzero final return also fails.
 run_tests() {
   local t rc=0
   for t in $(declare -F | awk '{print $3}' | grep '^test_' | sort); do
     CURRENT_TEST="${t}"
     TESTS_RUN=$((TESTS_RUN + 1))
     local before_failed="${TESTS_FAILED}" before_skipped="${TESTS_SKIPPED}"
-    "${t}"
+    local test_rc=0
+    "${t}" || test_rc=$?
+    if [[ "${test_rc}" -ne 0 && "${TESTS_FAILED}" == "${before_failed}" ]]; then
+      fail "test function returned rc=${test_rc} without reporting a failure"
+    fi
     # Print the pass line only if the test neither failed nor already reported a
     # skip line (skip() prints its own "ok - ... # SKIP", so an extra "ok" here
     # would double-report the same test).

@@ -117,4 +117,12 @@ test_install_refresh_preserves_pinned_identity() {
   assert_ok "CLI receives existing instance and channel" grep -q 'service install .*--instance proxmox-id --ring stable' "${CLI_LOG}"
 }
 
+test_pinned_instance_identity_can_differ_from_target_profile() {
+  reset
+  inventory pinned service-instance | jq '.activeServerId = "proxmox-id"' | jq -s '{entries:.}' >"${SB}/inventory.json"
+  assert_ok "refresh service targeting Proxmox with its own instance identity" happier_install_daemon_service "${SB}/cli" 0 stable
+  assert_eq "${HAPPIER_DAEMON_UNIT}" happier-daemon.service-instance.service "existing instance unit selected"
+  assert_ok "instance preserved independently of server profile" grep -q '^--server proxmox service install .*--instance service-instance --ring stable' "${CLI_LOG}"
+}
+
 run_tests

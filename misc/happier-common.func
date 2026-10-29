@@ -42,6 +42,26 @@ normalize_install_method() {
   esac
 }
 
+# Validate supplied presets at both entry points before interpreting them or
+# forwarding a port into commands. Empty inputs retain each caller's defaults.
+validate_happier_presets() {
+  local key value
+  for key in HAPPIER_PVE_SERVE_UI HAPPIER_PVE_AUTOSTART HAPPIER_PVE_DAEMON_AUTH HAPPIER_PVE_INSTALL_AGENTS HAPPIER_PVE_AUTO_UPDATE; do
+    value="${!key:-}"
+    case "${value}" in
+      "" | 0 | 1) ;;
+      *) msg_error "Invalid ${key}; use 0 or 1."; return 1 ;;
+    esac
+  done
+  value="${HAPPIER_PVE_SERVER_PORT:-}"
+  if [[ -n "${value}" ]]; then
+    if [[ ! "${value}" =~ ^0*([1-9][0-9]{0,4})$ ]] || ((10#${BASH_REMATCH[1]} > 65535)); then
+      msg_error "Invalid HAPPIER_PVE_SERVER_PORT; use a TCP port from 1 to 65535."
+      return 1
+    fi
+  fi
+}
+
 # HH:MM (24h) for the auto-update timer.
 is_valid_hhmm() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
 
@@ -68,6 +88,8 @@ if u.username or u.password:
 host = u.hostname
 if not host:
   sys.exit(0)
+if ":" in host:
+  host = f"[{host}]"
 port = f":{u.port}" if u.port else ""
 path = u.path or ""
 
@@ -478,7 +500,7 @@ BANNER
 
 # 256-color terminal? (tput may be missing in a minimal container.)
 _happier_term_256() {
-  [[ -n "${COLORTERM:-}" || "${TERM:-}" == *256color* ]] && return 0
+  [[ "${COLORTERM:-}" == truecolor || "${COLORTERM:-}" == 24bit || "${TERM:-}" == *256color* ]] && return 0
   local n=0
   n="$(tput colors 2>/dev/null || echo 0)"
   [[ "${n}" =~ ^[0-9]+$ ]] && ((n >= 256))
@@ -553,6 +575,17 @@ happier_apply_skin() {
     _happier_palette
     _happier_icons
   }
+  # Cancel exits inside app_questions, before its normal dialogs_end call.
+  # Release the skin's temporary files, then let the engine own exit behavior.
+  if declare -f exit_script >/dev/null 2>&1; then
+    if ! declare -f _happier_engine_exit_script >/dev/null 2>&1; then
+      eval "_happier_engine_exit_script() $(declare -f exit_script | tail -n +2)"
+    fi
+    exit_script() {
+      happier_dialogs_end || msg_warn "Could not remove temporary Happier dialog files"
+      _happier_engine_exit_script "$@"
+    }
+  fi
   color_spinner() {
     CS_YW="$(_happier_sgr efefef 255)"
     CS_YWB="$(_happier_sgr e0b65a 179 1)"

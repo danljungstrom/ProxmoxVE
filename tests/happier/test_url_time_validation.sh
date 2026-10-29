@@ -67,12 +67,48 @@ test_normalize_https_public_url_or_empty() {
   assert_eq "$(normalize_https_public_url_or_empty "https://")" "" "empty host rejected"
   assert_eq "$(normalize_https_public_url_or_empty "not a url")" "" "garbage rejected"
   assert_eq "$(normalize_https_public_url_or_empty "")" "" "empty rejected"
+  assert_eq "$(normalize_https_public_url_or_empty "https://[2001:db8::1]:8443/app/")" "https://[2001:db8::1]:8443/app" "IPv6 authority brackets preserved"
+  assert_eq "$(normalize_https_public_url_or_empty "https://[::1]/")" "https://[::1]" "IPv6 without explicit port"
   # D12: documented port-preserve + query/hash-drop behavior.
   assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com:8443")" "https://happier.example.com:8443" "explicit port preserved"
   assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com:8443/")" "https://happier.example.com:8443" "port preserved with trailing slash stripped"
   assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com/app?token=abc")" "https://happier.example.com/app" "query string dropped"
   assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com/app#frag")" "https://happier.example.com/app" "fragment dropped"
   assert_eq "$(normalize_https_public_url_or_empty "https://happier.example.com:8443/app/?x=1#y")" "https://happier.example.com:8443/app" "port kept, path kept, query+hash+slash dropped"
+}
+
+# shellcheck disable=SC2016 # variables and substitutions belong to the child shell
+test_app_questions_rejects_invalid_presets() {
+  local rc=0
+  env PHS_SILENT=1 HAPPIER_PVE_AUTOSTART=false bash -c '
+    source ./lib.sh
+    source ../../misc/happier-common.func
+    msg_error() { :; }
+    eval "$(extract_function ../../ct/happier.sh app_questions)"
+    app_questions
+  ' || rc=$?
+  assert_eq "${rc}" 1 "invalid boolean preset rejected before prompting"
+}
+
+# shellcheck disable=SC2016 # literal attack input and child-shell expansion are intentional
+test_installer_rejects_invalid_port_before_setup() {
+  local value rc
+  for value in 0 65536 '$(id)'; do
+    rc=0
+    env HAPPIER_PVE_SERVER_PORT="${value}" bash -c '
+      source ../../misc/happier-common.func
+      msg_error() { :; }
+      eval "$(sed -n "/^validate_happier_presets || exit 1$/,/^HAPPIER_SERVER_PORT=/p" ../../install/happier-install.sh)"
+    ' || rc=$?
+    assert_eq "${rc}" 1 "invalid TCP port rejected before setup"
+  done
+}
+
+test_valid_presets_preserve_defaults_and_tcp_boundary() {
+  assert_ok "absent presets retain defaults" validate_happier_presets
+  assert_ok "disabled preset remains valid" env HAPPIER_PVE_AUTOSTART=0 bash -c 'source ../../misc/happier-common.func; validate_happier_presets'
+  assert_ok "maximum valid port accepted" env HAPPIER_PVE_SERVER_PORT=65535 bash -c 'source ../../misc/happier-common.func; validate_happier_presets'
+  assert_ok "decimal port with leading zeros accepted" env HAPPIER_PVE_SERVER_PORT=0003005 bash -c 'source ../../misc/happier-common.func; validate_happier_presets'
 }
 
 test_extract_https_url_from_text() {
