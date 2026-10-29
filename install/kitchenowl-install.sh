@@ -38,10 +38,10 @@ $STD apt install -y \
   libicu-dev
 msg_ok "Installed Dependencies"
 
-PYTHON_VERSION="3.14" setup_uv
 fetch_and_deploy_gh_release "kitchenowl" "TomBursch/kitchenowl" "tarball" "latest" "/opt/kitchenowl"
 rm -rf /opt/kitchenowl/web
 fetch_and_deploy_gh_release "kitchenowl-web" "TomBursch/kitchenowl" "prebuild" "latest" "/opt/kitchenowl/web" "kitchenowl_Web.tar.gz"
+PYTHON_VERSION="3.14" UV_PROJECT_DIR="/opt/kitchenowl/backend" setup_uv
 
 msg_info "Setting up KitchenOwl"
 cd /opt/kitchenowl/backend
@@ -86,7 +86,6 @@ systemctl enable -q --now kitchenowl
 msg_ok "Created and Started Service"
 
 msg_info "Configuring Nginx"
-rm -f /etc/nginx/sites-enabled/default
 cat <<'EOF' >/etc/nginx/sites-available/kitchenowl.conf
 server {
     listen 80;
@@ -134,9 +133,7 @@ server {
     }
 }
 EOF
-ln -sf /etc/nginx/sites-available/kitchenowl.conf /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-$STD systemctl reload nginx
+nginx_enable_site kitchenowl.conf
 msg_ok "Configured Nginx"
 
 motd_ssh

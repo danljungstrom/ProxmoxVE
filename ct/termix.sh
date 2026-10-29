@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -30,7 +31,7 @@ function update_script() {
     exit
   fi
 
-  NODE_VERSION="24" setup_nodejs
+  NODE_VERSION="26" setup_nodejs
 
   if check_for_gh_tag "guacd" "apache/guacamole-server"; then
     msg_info "Stopping guacd"
@@ -112,14 +113,33 @@ EOF
     msg_ok "Stopped Termix"
 
     msg_info "Migrating Configuration"
-    if [[ ! -f /opt/termix/.env ]]; then
-      cat <<EOF >/opt/termix/.env
+    mkdir -p /opt/termix/db/data
+
+    if [[ -f /opt/termix/data/db.sqlite.encrypted && ! -f /opt/termix/db/data/db.sqlite.encrypted ]]; then
+      cp -a /opt/termix/data/db.sqlite.encrypted /opt/termix/db/data/db.sqlite.encrypted
+      [[ -f /opt/termix/data/db.sqlite.encrypted.meta ]] &&
+        cp -a /opt/termix/data/db.sqlite.encrypted.meta /opt/termix/db/data/db.sqlite.encrypted.meta
+      [[ -f /opt/termix/data/db.sqlite ]] &&
+        cp -a /opt/termix/data/db.sqlite /opt/termix/db/data/db.sqlite
+    fi
+
+    if [[ -f /opt/termix/data/.env && ! -f /opt/termix/db/data/.env ]]; then
+      cp -a /opt/termix/data/.env /opt/termix/db/data/.env
+    fi
+
+    for sub in ssl session_logs session_recordings acme-webroot certbot uploads; do
+      if [[ -d /opt/termix/data/$sub && ! -d /opt/termix/db/data/$sub ]]; then
+        cp -a "/opt/termix/data/$sub" "/opt/termix/db/data/$sub"
+      fi
+    done
+
+    cat <<EOF >/opt/termix/.env
 NODE_ENV=production
-DATA_DIR=/opt/termix/data
+DATA_DIR=/opt/termix/db/data
 GUACD_HOST=127.0.0.1
 GUACD_PORT=4822
 EOF
-    fi
+
     if ! grep -q "EnvironmentFile" /etc/systemd/system/termix.service 2>/dev/null; then
       cat <<EOF >/etc/systemd/system/termix.service
 [Unit]
@@ -143,20 +163,26 @@ EOF
     fi
     msg_ok "Migrated Configuration"
 
-    msg_info "Backing up Data"
-    cp -r /opt/termix/data /opt/termix_data_backup
-    cp -r /opt/termix/uploads /opt/termix_uploads_backup
-    msg_ok "Backed up Data"
+    create_backup /opt/termix/.env
 
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "termix" "Termix-SSH/Termix" "tarball"
+    CLEAN_INSTALL=1 CLEAN_INSTALL_KEEP="db/data data uploads" fetch_and_deploy_gh_release "termix" "Termix-SSH/Termix" "tarball"
+
+    restore_backup
 
     msg_info "Recreating Directories"
     mkdir -p /opt/termix/html \
       /opt/termix/nginx \
       /opt/termix/nginx/logs \
       /opt/termix/nginx/cache \
-      /opt/termix/nginx/client_body
+      /opt/termix/nginx/client_body \
+      /opt/termix/db/data
     msg_ok "Recreated Directories"
+
+    if [[ -f /opt/termix/db/data/db.sqlite.encrypted && ! -f /opt/termix/db/data/.env ]]; then
+      msg_error "Encrypted database restored without its keys (/opt/termix/db/data/.env is missing)"
+      msg_custom "🛟" "Restore the container from a backup and report this at https://github.com/community-scripts/ProxmoxVE/issues"
+      exit 1
+    fi
 
     msg_info "Building Frontend"
     cd /opt/termix
@@ -169,6 +195,10 @@ EOF
     msg_info "Building Backend"
     $STD npm rebuild better-sqlite3 --force
     $STD npm run build:backend
+    if [[ ! -f /opt/termix/dist/backend/backend/starter.js ]]; then
+      msg_error "Backend build failed: /opt/termix/dist/backend/backend/starter.js was not created"
+      exit 1
+    fi
     msg_ok "Built Backend"
 
     msg_info "Setting up Production Dependencies"
@@ -176,12 +206,6 @@ EOF
     $STD npm rebuild better-sqlite3 bcryptjs --force
     $STD npm cache clean --force
     msg_ok "Set up Production Dependencies"
-
-    msg_info "Restoring Data"
-    cp -r /opt/termix_data_backup /opt/termix/data
-    cp -r /opt/termix_uploads_backup /opt/termix/uploads
-    rm -rf /opt/termix_data_backup /opt/termix_uploads_backup
-    msg_ok "Restored Data"
 
     msg_info "Updating Frontend Files"
     rm -rf /opt/termix/html/*
@@ -200,7 +224,7 @@ EOF
       cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak
       curl -fsSL "https://raw.githubusercontent.com/Termix-SSH/Termix/main/docker/nginx.conf" -o /etc/nginx/nginx.conf
       sed -i '/^master_process/d' /etc/nginx/nginx.conf
-      sed -i 's|pid /tmp/nginx/nginx.pid;|pid /run/nginx.pid;|' /etc/nginx/nginx.conf
+      sed -i '/^pid \/app\/nginx/d' /etc/nginx/nginx.conf
       sed -i 's|error_log /tmp/nginx/error.log|error_log /var/log/nginx/error.log|' /etc/nginx/nginx.conf
       sed -i 's|access_log /tmp/nginx/access.log|access_log /var/log/nginx/access.log|' /etc/nginx/nginx.conf
       sed -i 's|/app/html|/opt/termix/html|g' /etc/nginx/nginx.conf
@@ -233,7 +257,12 @@ EOF
     fi
 
     msg_info "Starting Termix"
-    systemctl start termix
+    systemctl daemon-reload
+    if ! systemctl start termix; then
+      msg_error "Termix failed to start"
+      journalctl -u termix -n 30 --no-pager || true
+      exit 1
+    fi
     msg_ok "Started Termix"
     msg_ok "Updated successfully!"
   fi

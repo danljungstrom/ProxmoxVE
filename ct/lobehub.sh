@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -35,20 +36,18 @@ function update_script() {
     systemctl stop lobehub
     msg_ok "Stopped Services"
 
-    msg_info "Backing up Data"
-    cp /opt/lobehub/.env /opt/lobehub.env.bak
-    msg_ok "Backed up Data"
+    create_backup /opt/lobehub/.env
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "lobehub" "lobehub/lobehub" "tarball"
 
-    msg_info "Restoring Configuration"
-    cp /opt/lobehub.env.bak /opt/lobehub/.env
-    rm -f /opt/lobehub.env.bak
-    msg_ok "Restored Configuration"
+    restore_backup
 
     msg_info "Building Application"
     cd /opt/lobehub
     export NODE_OPTIONS="--max-old-space-size=8192"
+    if grep -qE '"@lobehub/ui": "\^5\.4[0-9]\.' package.json; then
+      sed -i "/^overrides:/a\  '@lobehub/ui': ~5.49.1" pnpm-workspace.yaml
+    fi
     $STD pnpm install
     $STD pnpm run build:docker
     unset NODE_OPTIONS

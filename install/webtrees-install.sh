@@ -32,10 +32,14 @@ msg_ok "Set up Webtrees"
 
 msg_info "Configuring Caddy"
 PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')
+PHP_SOCK=$(get_php_fpm_socket)
 cat <<EOF >/etc/caddy/Caddyfile
 :80 {
     root * /opt/webtrees
-    php_fastcgi unix//run/php/php${PHP_VER}-fpm.sock
+    # Caddy ignores data/.htaccess; media must go through webtrees so its privacy rules apply.
+    @private path /app/* /data/* /modules_v4/* /resources/* /vendor/* /.*
+    respond @private 403
+    php_fastcgi unix/${PHP_SOCK}
     file_server
     encode gzip
 }
@@ -47,7 +51,9 @@ msg_ok "Configured Caddy"
 
 msg_info "Automating Webtrees Setup"
 cd /opt/webtrees
-WT_ADMIN_PASS=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | head -c15)
+mkdir -p /opt/webtrees/data
+chown -R www-data:www-data /opt/webtrees/data
+WT_ADMIN_PASS=$(random_password 15)
 $STD sudo -u www-data php /opt/webtrees/index.php config-ini \
   --dbhost=127.0.0.1 \
   --dbport=3306 \
@@ -56,6 +62,15 @@ $STD sudo -u www-data php /opt/webtrees/index.php config-ini \
   --dbname=webtrees \
   --tblpfx=wt_ \
   --base-url="http://${LOCAL_IP}"
+msg_info "Initializing Webtrees database schema"
+for i in {1..15}; do
+  if curl -sf "http://127.0.0.1/" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+mariadb -u webtrees -p"${MARIADB_DB_PASS}" -h 127.0.0.1 webtrees -e "SHOW TABLES LIKE 'wt_user';" | grep -q wt_user
+msg_ok "Initialized Webtrees database schema"
 $STD sudo -u www-data php /opt/webtrees/index.php user Admin \
   --create \
   --real-name="Administrator" \
@@ -63,7 +78,7 @@ $STD sudo -u www-data php /opt/webtrees/index.php user Admin \
   --password="${WT_ADMIN_PASS}"
 $STD sudo -u www-data php /opt/webtrees/index.php user-setting Admin canadmin 1
 
-cat <<EOF >>~/webtrees.creds
+cat <<EOF >~/webtrees.creds
 
 Webtrees Admin User: Admin
 Webtrees Admin Password: ${WT_ADMIN_PASS}

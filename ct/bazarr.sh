@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -28,6 +29,31 @@ function update_script() {
     msg_error "No ${APP} Installation Found!"
     exit
   fi
+
+  if ! grep -qE -- "bazarr\.py.*[[:space:]](-c|--config)([[:space:]]|=)" /etc/systemd/system/bazarr.service 2>/dev/null; then
+    if [[ -d /opt/bazarr/data && ! -L /opt/bazarr/data && -n "$(ls -A /var/lib/bazarr/ 2>/dev/null)" ]]; then
+      msg_error "/opt/bazarr/data and /var/lib/bazarr both contain data - refusing to merge them. Keep the copy you want in /var/lib/bazarr, remove /opt/bazarr/data, then run the update again."
+      exit 1
+    fi
+
+    msg_info "Moving Bazarr data to /var/lib/bazarr"
+    systemctl stop bazarr
+    if [[ -L /opt/bazarr/data ]]; then
+      rm -f /opt/bazarr/data
+    elif [[ -d /opt/bazarr/data ]]; then
+      if ! cp -a /opt/bazarr/data/. /var/lib/bazarr/; then
+        systemctl start bazarr
+        msg_error "Could not copy /opt/bazarr/data to /var/lib/bazarr - nothing was removed."
+        exit 1
+      fi
+      rm -rf /opt/bazarr/data
+    fi
+    sed -i -E "s|^(ExecStart=.*bazarr\.py.*)$|\1 -c /var/lib/bazarr|" /etc/systemd/system/bazarr.service
+    systemctl daemon-reload
+    systemctl start bazarr
+    msg_ok "Moved Bazarr data to /var/lib/bazarr"
+  fi
+
   if check_for_gh_release "bazarr" "morpheus65535/bazarr"; then
     msg_info "Stopping Service"
     systemctl stop bazarr

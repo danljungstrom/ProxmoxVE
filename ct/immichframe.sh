@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: Thiago Canozzo Lahr (tclahr)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -8,7 +9,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 APP="ImmichFrame"
 var_tags="${var_tags:-photos;slideshow}"
 var_cpu="${var_cpu:-1}"
-var_ram="${var_ram:-1024}"
+var_ram="${var_ram:-2048}"
 var_disk="${var_disk:-8}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
@@ -30,14 +31,31 @@ function update_script() {
     exit
   fi
 
+  if ! dotnet --list-sdks 2>/dev/null | grep -q '^8\.'; then
+    msg_info "Installing .NET SDK 8.0"
+    if [[ "$(arch_resolve)" == "arm64" ]]; then
+      curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+      $STD bash /tmp/dotnet-install.sh --channel 8.0 --install-dir /usr/lib/dotnet8
+      ln -sf /usr/lib/dotnet8/dotnet /usr/bin/dotnet
+      rm -f /tmp/dotnet-install.sh
+    else
+      setup_deb822_repo \
+        "microsoft" \
+        "https://packages.microsoft.com/keys/microsoft-2025.asc" \
+        "https://packages.microsoft.com/debian/13/prod/" \
+        "trixie" \
+        "main"
+      $STD apt install -y dotnet-sdk-8.0
+    fi
+    msg_ok "Installed .NET SDK 8.0"
+  fi
+
   if check_for_gh_release "immichframe" "immichFrame/ImmichFrame"; then
     msg_info "Stopping Service"
     systemctl stop immichframe
     msg_ok "Stopped Service"
 
-    msg_info "Backing up Configuration"
-    cp -r /opt/immichframe/Config /tmp/immichframe_config.bak
-    msg_ok "Backed up Configuration"
+    create_backup /opt/immichframe/Config
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "immichframe" "immichFrame/ImmichFrame" "tarball" "latest" "/tmp/immichframe"
 
@@ -57,12 +75,20 @@ function update_script() {
     rm -rf /tmp/immichframe
     msg_ok "Setup ImmichFrame"
 
-    msg_info "Restoring Configuration"
-    cp -r /tmp/immichframe_config.bak/* /opt/immichframe/Config/
-    rm -rf /tmp/immichframe_config.bak
+    restore_backup
     chown -R immichframe:immichframe /opt/immichframe
-    msg_ok "Restored Configuration"
 
+    if ! grep -q '^Environment=IMMICHFRAME_ADMIN_PASSWORD=' /etc/systemd/system/immichframe.service; then
+      msg_info "Setting Admin Password"
+      ADMIN_PASSWORD=$(openssl rand -hex 16)
+      sed -i "/^Environment=DOTNET_CONTENTROOT=/a Environment=IMMICHFRAME_ADMIN_PASSWORD=${ADMIN_PASSWORD}" /etc/systemd/system/immichframe.service
+      cat <<EOF >>~/immichframe.creds
+ImmichFrame Admin User: admin
+ImmichFrame Admin Password: $ADMIN_PASSWORD
+EOF
+      systemctl daemon-reload
+      msg_ok "Set Admin Password (see ~/immichframe.creds)"
+    fi
 
     msg_info "Starting Service"
     systemctl start immichframe

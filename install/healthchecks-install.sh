@@ -14,14 +14,14 @@ update_os
 
 msg_info "Installing Dependencies"
 $STD apt install -y \
-  gcc \
-  python3 \
-  python3-dev \
-  python3-venv \
-  libpq-dev \
-  libcurl4-openssl-dev \
-  libssl-dev \
-  caddy
+    gcc \
+    python3 \
+    python3-dev \
+    python3-venv \
+    libpq-dev \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    caddy
 
 mkdir -p ~/.config/pip
 cat >~/.config/pip/pip.conf <<EOF
@@ -31,16 +31,16 @@ EOF
 msg_ok "Installed Dependencies"
 
 PG_VERSION=16 setup_postgresql
-PG_DB_NAME="healthchecks_db" PG_DB_USER="hc_user" PG_DB_PASS=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | cut -c1-13) setup_postgresql_db
+PG_DB_NAME="healthchecks_db" PG_DB_USER="hc_user" PG_DB_PASS=$(random_password 13) setup_postgresql_db
 
 msg_info "Setup Keys (Admin / Secret)"
-SECRET_KEY="$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | cut -c1-32)"
+SECRET_KEY="$(random_password 32)"
 ADMIN_EMAIL="admin@community-scripts.org"
 ADMIN_PASSWORD="$PG_DB_PASS"
-{
-  echo "healthchecks Admin Email: $ADMIN_EMAIL"
-  echo "healthchecks Admin Password: $ADMIN_PASSWORD"
-} >>~/healthchecks.creds
+cat <<EOF >~/healthchecks.creds
+healthchecks Admin Email: $ADMIN_EMAIL
+healthchecks Admin Password: $ADMIN_PASSWORD
+EOF
 msg_ok "Set up Keys"
 
 fetch_and_deploy_gh_release "healthchecks" "healthchecks/healthchecks" "tarball"

@@ -44,6 +44,7 @@ NODE_VERSION=24 setup_nodejs
 PYTHON_VERSION=3.14 setup_uv
 
 fetch_and_deploy_gh_release "fireshare" "ShaneIsrael/fireshare" "tarball"
+UV_PROJECT_DIR="/opt/fireshare" setup_uv
 
 msg_info "Compiling SVT-AV1 (Patience)"
 cd /tmp
@@ -91,7 +92,7 @@ $STD ldconfig
 msg_ok "Compiled ffmpeg"
 
 msg_info "Configuring Fireshare (Patience)"
-ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | head -c13)
+ADMIN_PASSWORD=$(random_password 13)
 SECRET=$(openssl rand -base64 48)
 mkdir -p /opt/fireshare-{data,videos,images,processed}
 cd /opt/fireshare
@@ -141,6 +142,9 @@ cp /opt/fireshare/app/nginx/prod.conf /etc/nginx/nginx.conf
 sed -i 's|root /processed/|root /opt/fireshare-processed/|g' /etc/nginx/nginx.conf
 sed -i 's/^user[[:space:]]\+nginx;/user  root;/' /etc/nginx/nginx.conf
 sed -i 's|root[[:space:]]\+/app/build;|root /opt/fireshare/app/client/build;|' /etc/nginx/nginx.conf
+sed -i 's/__FIRESHARE_PORT__/80/g' /etc/nginx/nginx.conf
+cp /opt/fireshare/app/nginx/error.html /etc/nginx/
+cp /opt/fireshare/app/nginx/api_unavailable.html /etc/nginx/
 systemctl start nginx
 
 cat <<EOF >~/fireshare.creds

@@ -7,7 +7,7 @@
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 
-# Used by community-scripts helpers (e.g. motd_ssh in misc/install.func).
+# Used by the engine helpers (motd_ssh, customize -> /usr/bin/update entrypoint).
 APP="Happier"
 app="${app:-happier}"
 APPLICATION="Happier"
@@ -828,16 +828,12 @@ if [[ "${INSTALL_METHOD}" == "installers" ]]; then
   fi
 
   motd_ssh
+  # customize() writes the engine's /usr/bin/update entrypoint, baking in the
+  # COMMUNITY_SCRIPTS_URL this install came from (fork + ref).
   customize
-
-  # customize() creates /usr/bin/update pointing to community-scripts; fix to use the fork.
-  cat >/usr/bin/update <<'UPDATEEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-curl -fsSL https://raw.githubusercontent.com/happier-dev/ProxmoxVE/main/ct/happier.sh | bash
-UPDATEEOF
-  chmod +x /usr/bin/update
-
+  # The engine's cleanup runs apt autoremove/clean with no lock wait (the fork's
+  # core.func patch for that is gone with misc/); wait for the locks first.
+  wait_for_apt_locks
   cleanup_lxc
   exit 0
 fi
@@ -1317,14 +1313,10 @@ else
 fi
 
 motd_ssh
+# customize() writes the engine's /usr/bin/update entrypoint, baking in the
+# COMMUNITY_SCRIPTS_URL this install came from (fork + ref).
 customize
-
-# customize() creates /usr/bin/update pointing to community-scripts; fix to use the fork.
-cat >/usr/bin/update <<'UPDATEEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-curl -fsSL https://raw.githubusercontent.com/happier-dev/ProxmoxVE/main/ct/happier.sh | bash
-UPDATEEOF
-chmod +x /usr/bin/update
-
+# The engine's cleanup runs apt autoremove/clean with no lock wait (the fork's
+# core.func patch for that is gone with misc/); wait for the locks first.
+wait_for_apt_locks
 cleanup_lxc

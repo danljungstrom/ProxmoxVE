@@ -33,7 +33,12 @@ PNPM_VERSION=$(jq -r '.packageManager | ltrimstr("pnpm@")' /opt/bookorbit/packag
 
 $STD corepack prepare "pnpm@${PNPM_VERSION}" --activate
 $STD pnpm install --frozen-lockfile
-$STD pnpm --filter client run build-only
+# vite's bundler (rolldown) crashes at random on some builds, rolldown#10860.
+for attempt in 1 2 3; do
+  $STD pnpm --filter client run build-only && break
+  [[ $attempt -eq 3 ]] && { msg_error "Client build failed three times"; exit 1; }
+  msg_warn "Client build failed (attempt $attempt), retrying"
+done
 $STD pnpm --filter server run build
 cp -r /opt/bookorbit/client/dist /opt/bookorbit/server/public
 mkdir -p /opt/bookorbit/server/migrations
@@ -51,7 +56,7 @@ mkdir -p /opt/bookorbit-data/covers /opt/bookorbit-data/book-bucket /opt/bookorb
 APP_VER=$(cat ~/.bookorbit)
 JWT_SECRET=$(openssl rand -hex 32)
 SETUP_BOOTSTRAP_TOKEN=$(openssl rand -hex 16)
-cat <<EOF >>~/bookorbit.creds
+cat <<EOF >~/bookorbit.creds
 
 Setup Token: ${SETUP_BOOTSTRAP_TOKEN}
 EOF
@@ -81,6 +86,7 @@ Requires=postgresql.service
 [Service]
 Type=simple
 User=root
+TimeoutStartSec=infinity
 WorkingDirectory=/opt/bookorbit/server
 EnvironmentFile=/opt/bookorbit/.env
 ExecStartPre=/usr/bin/node /opt/bookorbit/server/dist/scripts/migrate.js

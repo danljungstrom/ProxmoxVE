@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-INSTALLER_REPO="${INSTALLER_REPO:-happier-dev/ProxmoxVE}"
-INSTALLER_REF="${INSTALLER_REF:-main}"
-export INSTALLER_REPO INSTALLER_REF
-
-BUILD_FUNC_URL="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/misc/build.func"
-BUILD_FUNC="$(curl -fsSL "${BUILD_FUNC_URL}")" || {
-  echo "Failed to download build.func from: ${BUILD_FUNC_URL}" >&2
-  exit 1
-}
-if [[ -z "${BUILD_FUNC//[[:space:]]/}" ]]; then
-  echo "Downloaded build.func is empty: ${BUILD_FUNC_URL}" >&2
-  exit 1
-fi
-source /dev/stdin <<<"${BUILD_FUNC}"
+_CS_DEFAULT_URL="https://raw.githubusercontent.com/${INSTALLER_REPO:-happier-dev/ProxmoxVE}/${INSTALLER_REF:-main}"
+# happier-dev fork: boots the community-scripts/core engine like every upstream ct
+# script (upstream moved off ProxmoxVE's misc/*.func), with two fork twists:
+# - Scripts root: COMMUNITY_SCRIPTS_URL wins, else INSTALLER_REPO/INSTALLER_REF
+#   (kept for back-compat), else happier-dev@main. The engine fetches
+#   install/happier-install.sh from it and bakes it into /usr/bin/update.
+# - Engine: pinned to a vetted community-scripts/core commit instead of the moving
+#   main branch (supply chain); HAPPIER_CORE_URL overrides it. An inherited
+#   COMMUNITY_SCRIPTS_CORE_URL is ignored on purpose: every generated
+#   /usr/bin/update exports one, which would freeze containers on their old engine.
+HAPPIER_CORE_REF="8ae24cef982488de94d1906b1366eee17d28e064"
+COMMUNITY_SCRIPTS_CORE_URL="${HAPPIER_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/${HAPPIER_CORE_REF}}"
+export COMMUNITY_SCRIPTS_CORE_URL
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+# shellcheck disable=SC1090 # engine path resolved at runtime (local checkout or pinned URL)
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 "${COMMUNITY_SCRIPTS_CORE_URL}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: happier-dev
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE

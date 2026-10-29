@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -61,7 +62,7 @@ function update_script() {
     GRAMPS_VERSION=$(/opt/gramps-web/venv/bin/python3 -c "import gramps.version; print('%s%s' % (gramps.version.VERSION_TUPLE[0], gramps.version.VERSION_TUPLE[1]))" 2>/dev/null || echo "60")
     GRAMPS_PLUGINS_DIR="/opt/gramps-web/data/gramps/gramps${GRAMPS_VERSION}/plugins"
     mkdir -p "$GRAMPS_PLUGINS_DIR"
-    $STD wget -q https://github.com/gramps-project/addons/archive/refs/heads/master.zip -O /tmp/gramps-addons.zip
+    curl -fsSL -o /tmp/gramps-addons.zip https://github.com/gramps-project/addons/archive/refs/heads/master.zip
     for addon in FilterRules JSON; do
       unzip -p /tmp/gramps-addons.zip "addons-master/gramps${GRAMPS_VERSION}/download/${addon}.addon.tgz" |
         tar -xz -C "$GRAMPS_PLUGINS_DIR"
@@ -85,8 +86,13 @@ function update_script() {
     cd /opt/gramps-web/frontend
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
+    create_backup /opt/gramps-web/frontend/dist/config.js
+
     $STD npm install
     $STD npm run build
+
+    restore_backup
+
     msg_ok "Updated Gramps Web Frontend"
 
     msg_info "Starting Service"

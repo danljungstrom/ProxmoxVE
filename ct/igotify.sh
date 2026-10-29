@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: pfassina
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -35,16 +36,11 @@ function update_script() {
     systemctl stop igotify
     msg_ok "Stopped Service"
 
-    msg_info "Backing up Configuration"
-    cp /opt/igotify/.env /opt/igotify.env.bak
-    msg_ok "Backed up Configuration"
+    create_backup /opt/igotify/.env
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "igotify" "androidseb25/iGotify-Notification-Assistent" "prebuild" "latest" "/opt/igotify" "iGotify-Notification-Service-$(arch_resolve)-v*.zip"
 
-    msg_info "Restoring Configuration"
-    cp /opt/igotify.env.bak /opt/igotify/.env
-    rm -f /opt/igotify.env.bak
-    msg_ok "Restored Configuration"
+    restore_backup
 
     msg_info "Starting Service"
     systemctl start igotify
