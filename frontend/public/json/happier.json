@@ -55,6 +55,10 @@
         {
             "text": "Supply-chain pinning: the install and update scripts are fetched from INSTALLER_REPO (default happier-dev/ProxmoxVE) at INSTALLER_REF (default main), or from COMMUNITY_SCRIPTS_URL when set. Export INSTALLER_REF=<tag-or-sha> before installing for a reproducible, pinned install; the generated /usr/bin/update keeps the same ref. The community-scripts/core engine is pinned to a vetted commit (override with HAPPIER_CORE_URL).",
             "type": "info"
+        },
+        {
+            "text": "Updates stop before relay changes if the CLI bootstrap fails. Relay or daemon recovery failures are reported and make the update fail; correct the reported problem and run update again. Updates retain the installed daemon service identity and its enabled/running state. If multiple services match the Proxmox profile, inspect the CLI service list and select the intended setup before retrying. From-source devbox installs save agent paths and the optional GitHub token in the private stack env file before either manual or service startup.",
+            "type": "info"
         }
     ]
 }
